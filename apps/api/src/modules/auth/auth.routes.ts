@@ -118,7 +118,7 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
           user: auth.toAuthUser(user),
         };
       } catch (err) {
-        if (err instanceof AppError && err.statusCode === 401) clearRefreshCookie(reply);
+        if (err instanceof AppError && err.statusCode === 401) clearRefreshCookie(req, reply);
         throw err;
       }
     },
@@ -129,7 +129,7 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
     schema: { tags: tag, summary: 'Sign out of this device', security: [{ bearerAuth: [] }], response: noContent },
     handler: async (req, reply) => {
       await revokeSession(currentUser(req).sessionId, 'logout');
-      clearRefreshCookie(reply);
+      clearRefreshCookie(req, reply);
       return reply.status(204).send(null);
     },
   });
@@ -139,7 +139,7 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
     schema: { tags: tag, summary: 'Sign out of every device', security: [{ bearerAuth: [] }], response: noContent },
     handler: async (req, reply) => {
       await revokeAllSessions(currentUser(req).id, 'logout_all');
-      clearRefreshCookie(reply);
+      clearRefreshCookie(req, reply);
       return reply.status(204).send(null);
     },
   });
@@ -292,7 +292,7 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     handler: async (req, reply) => {
       await auth.resetPassword(req, req.body.resetToken, req.body.newPassword);
-      clearRefreshCookie(reply);
+      clearRefreshCookie(req, reply);
       return reply.status(204).send(null);
     },
   });

@@ -6,6 +6,7 @@ import { sessions, users } from '../../db/schema/index.js';
 import { randomToken, sha256 } from '../../lib/crypto.js';
 import { Errors } from '../../lib/errors.js';
 import { type PlatformRole, signAccessToken } from '../../lib/jwt.js';
+import { refreshCookieSameSite } from '../../lib/origins.js';
 import { isMobile, requestMeta } from '../../lib/request-context.js';
 
 export const REFRESH_COOKIE = 'communiti_rt';
@@ -133,24 +134,28 @@ export async function listSessions(userId: string) {
 
 // ── Transport: web gets an httpOnly cookie, mobile gets the token in the body ──
 
-const cookieOptions = () => ({
-  httpOnly: true,
-  secure: env.isProd || env.COOKIE_SAMESITE === 'none',
-  sameSite: env.COOKIE_SAMESITE,
-  domain: env.COOKIE_DOMAIN,
-  path: REFRESH_COOKIE_PATH,
-});
+const cookieOptions = (req: FastifyRequest) => {
+  const sameSite = refreshCookieSameSite(req.headers.origin);
+  return {
+    httpOnly: true,
+    // SameSite=None is only accepted by browsers together with Secure.
+    secure: env.isProd || sameSite === 'none',
+    sameSite,
+    domain: env.COOKIE_DOMAIN, // leave unset: host-only on the API domain is enough and safest
+    path: REFRESH_COOKIE_PATH,
+  };
+};
 
 /** Returns the refresh token for the response body (mobile) or sets the cookie (web) and returns null. */
 export function deliverRefreshToken(req: FastifyRequest, reply: FastifyReply, token: string | null) {
   if (token === null) return null;
   if (isMobile(req)) return token;
-  reply.setCookie(REFRESH_COOKIE, token, { ...cookieOptions(), maxAge: Math.floor(refreshTtlMs() / 1000) });
+  reply.setCookie(REFRESH_COOKIE, token, { ...cookieOptions(req), maxAge: Math.floor(refreshTtlMs() / 1000) });
   return null;
 }
 
-export function clearRefreshCookie(reply: FastifyReply) {
-  reply.clearCookie(REFRESH_COOKIE, cookieOptions());
+export function clearRefreshCookie(req: FastifyRequest, reply: FastifyReply) {
+  reply.clearCookie(REFRESH_COOKIE, cookieOptions(req));
 }
 
 export function readRefreshToken(req: FastifyRequest, bodyToken?: string) {

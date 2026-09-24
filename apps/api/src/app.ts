@@ -7,6 +7,7 @@ import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fas
 import { uuidv7 } from 'uuidv7';
 import { env } from './config/env.js';
 import { loggerOptions } from './lib/logger.js';
+import { allowedOriginRules, isAllowedOrigin } from './lib/origins.js';
 import { routes } from './modules/index.js';
 import { authPlugin } from './plugins/auth.js';
 import { errorHandlerPlugin } from './plugins/error-handler.js';
@@ -39,11 +40,8 @@ export async function buildApp() {
   await app.register(errorHandlerPlugin);
   await app.register(helmet, { contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } });
   await app.register(cors, {
-    origin: (origin, cb) => {
-      // Mobile apps and server-to-server calls send no Origin header.
-      if (!origin || env.allowedOrigins.includes(origin.replace(/\/$/, ''))) return cb(null, true);
-      cb(null, false);
-    },
+    // Echoes the caller's origin only when it is on the allow-list (see lib/origins.ts).
+    origin: (origin, cb) => cb(null, isAllowedOrigin(origin)),
     credentials: true, // refresh cookie
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Client', 'X-App-Version', 'Idempotency-Key', 'X-Request-Id'],
@@ -63,6 +61,7 @@ export async function buildApp() {
 
   await app.register(routes, { prefix: '/api/v1' });
 
+  app.log.info({ corsOrigins: allowedOriginRules(), cookieSameSite: env.COOKIE_SAMESITE }, 'CORS configuration');
   if (env.mailTestSender && !env.MAIL_REDIRECT_TO) {
     app.log.warn('MAIL_FROM uses onboarding@resend.dev: Resend will only deliver to your account email. Set MAIL_REDIRECT_TO to it for testing.');
   }

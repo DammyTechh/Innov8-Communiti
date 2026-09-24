@@ -15,7 +15,7 @@ for _ in range(60):  # wait for the API
 else:
     sys.exit('API did not become healthy')
 
-for name in ['test_auth.py', 'test_modules.py', 'test_extended.py']:
+for name in ['test_auth.py', 'test_cors.py', 'test_modules.py', 'test_extended.py']:
     print(f'\n===== {name} =====')
     try:
         exec(open(os.path.join(here, name)).read(), ns)

@@ -17,5 +17,6 @@ Environment: `API_URL` (default `http://localhost:4000`), `API_LOG` (server log 
 | File | Covers |
 |---|---|
 | `test_auth.py` | sign-up, verification, login, sessions, refresh rotation, forgot/reset/change password, lockout |
+| `test_cors.py` | allowed and blocked origins (including look-alike domains), refresh cookie attributes |
 | `test_modules.py` | onboarding, follows, feed, posts, comments, forums, search, projects, workspace, chat, notifications, explore, reports, admin |
 | `test_extended.py` | permissions, media attachments, edits/deletes, ownership, moderation, account deletion, regression checks |

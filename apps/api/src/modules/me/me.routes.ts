@@ -236,7 +236,7 @@ export const meRoutes: FastifyPluginAsyncZod = async (app) => {
       await revokeAllSessions(me.id, 'account_deletion');
       await audit({ actorId: me.id, action: 'user.deletion_scheduled', entityType: 'user', entityId: me.id, message: req.body.reason }, req);
       await sendMailSafe(u.email, templates.accountDeletionScheduled({ name: u.fullName.split(' ')[0]!, date: when.toDateString() }));
-      clearRefreshCookie(reply);
+      clearRefreshCookie(req, reply);
       return reply.status(204).send(null);
     },
   });

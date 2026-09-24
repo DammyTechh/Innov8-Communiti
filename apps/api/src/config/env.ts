@@ -29,7 +29,7 @@ const schema = z.object({
   JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET must be at least 32 characters'),
   ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
-  COOKIE_SAMESITE: z.enum(['lax', 'none', 'strict']).default('lax'),
+  COOKIE_SAMESITE: z.enum(['auto', 'lax', 'none', 'strict']).default('auto'),
   COOKIE_DOMAIN: z.string().optional().transform((v) => v || undefined),
 
   GOOGLE_CLIENT_ID: z.string().default(''),
@@ -73,9 +73,6 @@ export const env = {
   ...parsed.data,
   isProd: parsed.data.NODE_ENV === 'production',
   isTest: parsed.data.NODE_ENV === 'test',
-  allowedOrigins: Array.from(
-    new Set([parsed.data.WEB_URL, parsed.data.ADMIN_URL, ...parsed.data.CORS_ORIGINS].map((o) => o.replace(/\/$/, ''))),
-  ),
   googleEnabled: Boolean(parsed.data.GOOGLE_CLIENT_ID && parsed.data.GOOGLE_CLIENT_SECRET),
   /** Resend's shared test sender only delivers to the Resend account owner's address. */
   mailTestSender: parsed.data.MAIL_FROM.includes('@resend.dev'),

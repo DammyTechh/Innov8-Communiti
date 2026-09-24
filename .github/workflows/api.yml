@@ -103,6 +103,7 @@ jobs:
       API_URL: http://localhost:4000
       WEB_URL: http://localhost:5173
       ADMIN_URL: http://localhost:5174
+      CORS_ORIGINS: https://mycommuniti.org,https://*.mycommuniti.org
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/communiti
       DIRECT_URL: postgresql://postgres:postgres@localhost:5432/communiti
       DB_POOL_MAX: '1' # production pool size: catches transaction deadlocks
@@ -226,7 +227,7 @@ jobs:
     # Add required reviewers to the "production" environment for a manual approval gate.
     environment:
       name: production
-      url: ${{ vars.PRODUCTION_API_URL }}
+      url: ${{ vars.PRODUCTION_API_URL || 'https://api.mycommuniti.org' }}
     concurrency:
       group: api-production
       cancel-in-progress: false
@@ -258,7 +259,7 @@ jobs:
             --env APP_VERSION="$version" --env APP_COMMIT="${{ github.sha }}"
       - name: Verify production is healthy and serving this commit
         env:
-          API: ${{ vars.PRODUCTION_API_URL }}
+          API: ${{ vars.PRODUCTION_API_URL || 'https://api.mycommuniti.org' }}
         run: |
           for _ in $(seq 1 20); do
             body=$(curl -sf "$API/api/v1/health" || true)
