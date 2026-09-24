@@ -156,11 +156,21 @@ One-time setup:
 
 Vercel's own cron still runs daily against `/api/v1/internal/cron/cleanup` with `CRON_SECRET`.
 
-**Cookies across domains.** The refresh token is an httpOnly cookie scoped to `/api/v1/auth`.
-- **Same site** (recommended), e.g. `app.communiti.app` + `api.communiti.app`: `COOKIE_SAMESITE=lax`, `COOKIE_DOMAIN=.communiti.app`.
-- **Different sites** (e.g. `*.vercel.app` previews): `COOKIE_SAMESITE=none` (forces `Secure`), and leave `COOKIE_DOMAIN` empty.
+### Domain: api.mycommuniti.org
 
-Also add preview frontend origins to `CORS_ORIGINS`.
+1. In Vercel → Project → Settings → Domains, add `api.mycommuniti.org`.
+2. At your DNS provider, create the record Vercel shows (normally `CNAME api → cname.vercel-dns.com`). HTTPS is issued automatically.
+3. Copy `.env.production.example` into Vercel's Production environment. It already has `API_URL`, the Google redirect URI and CORS set for this domain.
+4. In Google Cloud Console, add the authorised redirect URI `https://api.mycommuniti.org/api/v1/auth/google/callback`.
+5. When the frontends are live, update `WEB_URL` and `ADMIN_URL` in Vercel and redeploy. Emails and Google sign-in send users there.
+
+**CORS: no changes needed when frontends go live.**
+
+`CORS_ORIGINS=https://mycommuniti.org,https://*.mycommuniti.org` allows the apex and every subdomain (`app.`, `admin.`, `www.`, `staging.app.` …) over HTTPS. Matching compares parsed hosts, not string suffixes, so look-alikes such as `evilmycommuniti.org` or `mycommuniti.org.evil.com` are always blocked. Mobile apps send no `Origin` header and are unaffected. To test a frontend on Vercel preview URLs, add `https://*.vercel.app` (or a narrower pattern) to `CORS_ORIGINS`.
+
+**Refresh cookie: automatic.**
+
+With `COOKIE_SAMESITE=auto`, a frontend on `*.mycommuniti.org` gets a host-only `HttpOnly; Secure; SameSite=Lax` cookie on `api.mycommuniti.org`. That is the most robust option, because browsers treat it as first-party. A frontend on another site (e.g. a Vercel preview) gets `SameSite=None; Secure`. Some browsers, notably Safari, block such third-party cookies, so keep production frontends on `mycommuniti.org` subdomains. Leave `COOKIE_DOMAIN` empty.
 
 ## 7. Frontend integration
 
