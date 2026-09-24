@@ -131,7 +131,13 @@ jobs:
       - name: Start API (compiled build)
         run: |
           node dist/src/server.js > api.log 2>&1 &
-          for _ in $(seq 1 30); do curl -sf http://localhost:4000/api/v1/health && exit 0; sleep 1; done
+          echo $! > api.pid
+          for _ in $(seq 1 30); do
+            # Must be OUR process answering: fail if it died (e.g. port already in use).
+            kill -0 "$(cat api.pid)" 2>/dev/null || { echo "::error::API process exited"; cat api.log; exit 1; }
+            curl -sf http://localhost:4000/api/v1/health && exit 0
+            sleep 1
+          done
           cat api.log; exit 1
       - name: End-to-end tests
         run: npm run test:e2e
