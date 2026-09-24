@@ -157,7 +157,7 @@ jobs:
           if grep -E '"level":(50|60)' api.log; then echo "::error::The API logged errors during the test run"; exit 1; fi
       - name: Upload logs and OpenAPI
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: api-e2e-${{ github.run_id }}
           path: |
