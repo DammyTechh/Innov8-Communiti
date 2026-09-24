@@ -1,0 +1,61 @@
+{
+  "name": "@communiti/api",
+  "version": "1.0.0",
+  "description": "CommUniti REST API (Fastify + TypeScript + Supabase Postgres)",
+  "scripts": {
+    "dev": "tsx watch --env-file=.env src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/server.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "db:generate": "drizzle-kit generate --name init",
+    "db:migrate": "tsx --env-file=.env scripts/migrate.ts",
+    "db:seed-admin": "tsx --env-file=.env scripts/seed-admin.ts",
+    "openapi:export": "tsx --env-file=.env scripts/export-openapi.ts",
+    "test": "vitest run",
+    "db:build": "tsx scripts/build-migration.ts",
+    "mail:test": "tsx --env-file=.env scripts/test-mail.ts",
+    "lint": "eslint .",
+    "test:e2e": "python3 tests/e2e/run.py",
+    "openapi:validate": "node -e \"import('@apidevtools/swagger-parser').then(async ({default:P})=>{const a=await P.validate('openapi.json');console.log('OpenAPI valid:',Object.keys(a.paths).length,'paths')})\""
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@fastify/cookie": "^11.1.2",
+    "@fastify/cors": "^11.3.0",
+    "@fastify/helmet": "^13.1.1",
+    "@fastify/rate-limit": "^11.2.0",
+    "@fastify/sensible": "^6.0.5",
+    "@fastify/swagger": "^9.9.0",
+    "@node-rs/argon2": "^2.2.1",
+    "@supabase/supabase-js": "^2.117.1",
+    "drizzle-orm": "^0.45.3",
+    "fastify": "^5.12.5",
+    "fastify-plugin": "^6.0.0",
+    "fastify-type-provider-zod": "^7.0.0",
+    "google-auth-library": "^11.1.0",
+    "jose": "^6.2.12",
+    "nodemailer": "^10.0.10",
+    "openapi-types": "^12.1.3",
+    "pino": "^10.3.1",
+    "postgres": "^3.4.9",
+    "uuidv7": "^1.2.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@apidevtools/swagger-parser": "^13.1.0",
+    "@types/node": "^26.6.2",
+    "@types/nodemailer": "^8.0.2",
+    "dotenv": "^18.0.3",
+    "drizzle-kit": "^0.31.11",
+    "eslint": "^9.39.5",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^5.0.1"
+  },
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,5 @@
+# Replace with your GitHub username or team, then set "require_code_owner_review": true
+# in .github/rulesets/main.json and re-run scripts/setup-github.sh.
+# /apps/api/            @your-github-username
+# /apps/api/supabase/   @your-github-username
+# /.github/             @your-github-username

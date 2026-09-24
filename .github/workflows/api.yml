@@ -1,0 +1,263 @@
+name: API CI/CD
+
+# Every push and pull request runs the full check suite. Nothing is deployed unless
+# "CI passed" is green. Protect `main` with the ruleset in .github/rulesets/main.json
+# so merging also requires it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: api-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            api:
+              - 'apps/api/**'
+              - '.github/workflows/api.yml'
+
+  quality:
+    name: Typecheck, lint, build, migration drift
+    needs: changes
+    if: needs.changes.outputs.api == 'true' || github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/api/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        run: npm run build
+      - name: Migration is in sync with the schema
+        env:
+          DATABASE_URL: postgres://unused
+        run: |
+          npm run db:generate
+          if [ -n "$(git status --porcelain drizzle)" ]; then
+            echo "::error::src/db/schema changed but the migration was not regenerated. Run: npm run db:generate && npm run db:build"
+            git status --porcelain drizzle
+            exit 1
+          fi
+          npm run db:build
+          git diff --exit-code supabase/migrations || { echo "::error::supabase/migrations is stale. Run: npm run db:build"; exit 1; }
+      - name: Dependency audit (critical)
+        run: npm audit --omit=dev --audit-level=critical
+
+  e2e:
+    name: Database + end-to-end tests
+    needs: changes
+    if: needs.changes.outputs.api == 'true' || github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/api
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: communiti
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      NODE_ENV: test
+      LOG_LEVEL: info # codes are read from the log (SMTP is not configured in CI)
+      PORT: '4000'
+      API_URL: http://localhost:4000
+      WEB_URL: http://localhost:5173
+      ADMIN_URL: http://localhost:5174
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/communiti
+      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/communiti
+      DB_POOL_MAX: '1' # production pool size: catches transaction deadlocks
+      JWT_ACCESS_SECRET: ci-only-secret-ci-only-secret-ci-only-secret-ci-only-secret
+      CRON_SECRET: ci-cron-secret
+      SMTP_PASS: ''
+      API_LOG: api.log
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/api/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: Apply migration (twice, to prove it is idempotent)
+        run: |
+          npx tsx scripts/migrate.ts
+          npx tsx scripts/migrate.ts | grep -q "up to date"
+      - name: Seed admin
+        env:
+          ADMIN_EMAIL: admin@communiti.app
+          ADMIN_PASSWORD: Admin12345
+        run: npx tsx scripts/seed-admin.ts
+      - name: Start API (compiled build)
+        run: |
+          node dist/src/server.js > api.log 2>&1 &
+          for _ in $(seq 1 30); do curl -sf http://localhost:4000/api/v1/health && exit 0; sleep 1; done
+          cat api.log; exit 1
+      - name: End-to-end tests
+        run: npm run test:e2e
+      - name: Cron endpoint rejects bad secret, accepts good one
+        run: |
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'authorization: Bearer wrong' localhost:4000/api/v1/internal/cron/cleanup)" = 401
+          curl -sf -H "authorization: Bearer $CRON_SECRET" localhost:4000/api/v1/internal/cron/cleanup
+      - name: OpenAPI document is valid
+        run: |
+          npx tsx scripts/export-openapi.ts
+          npm run openapi:validate
+      - name: No server errors in the log
+        run: |
+          if grep -E '"level":(50|60)' api.log; then echo "::error::The API logged errors during the test run"; exit 1; fi
+      - name: Upload logs and OpenAPI
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-e2e-${{ github.run_id }}
+          path: |
+            apps/api/api.log
+            apps/api/openapi.json
+          retention-days: 7
+
+  # The ONE required status check. Branch protection points at this name, so adding
+  # or renaming jobs above never requires touching repository settings.
+  ci-passed:
+    name: CI passed
+    needs: [changes, quality, e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: All checks succeeded (or were skipped because nothing changed)
+        run: |
+          for r in "${{ needs.changes.result }}" "${{ needs.quality.result }}" "${{ needs.e2e.result }}"; do
+            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then echo "::error::A required job ended with: $r"; exit 1; fi
+          done
+          echo "All checks passed."
+
+  deploy-preview:
+    name: Deploy preview
+    needs: [changes, ci-passed]
+    # Same-repo PRs only: secrets are not available to forks.
+    if: github.event_name == 'pull_request' && needs.changes.outputs.api == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    environment:
+      name: preview
+      url: ${{ steps.deploy.outputs.url }}
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: npm install --global vercel@latest
+      - run: vercel pull --yes --environment=preview --token=${{ secrets.VERCEL_TOKEN }}
+      - run: vercel build --token=${{ secrets.VERCEL_TOKEN }}
+      - id: deploy
+        run: |
+          url=$(vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }} \
+            --env APP_VERSION="pr-${{ github.event.number }}" --env APP_COMMIT="${{ github.event.pull_request.head.sha }}")
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+      - name: Comment preview URL
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const url = '${{ steps.deploy.outputs.url }}';
+            await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number,
+              body: `API preview: ${url}/api/docs\nHealth: ${url}/api/v1/health` });
+
+  deploy-production:
+    name: Deploy production
+    needs: [changes, ci-passed]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.api == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Add required reviewers to the "production" environment for a manual approval gate.
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_API_URL }}
+    concurrency:
+      group: api-production
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/api/package-lock.json
+      - run: npm ci
+      - name: Apply database migrations (before the new code goes live)
+        env:
+          DIRECT_URL: ${{ secrets.PRODUCTION_DIRECT_URL }}
+        run: npx tsx scripts/migrate.ts
+      - run: npm install --global vercel@latest
+      - run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+      - run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+      - name: Deploy
+        run: |
+          version=$(node -p "require('./package.json').version")
+          vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }} \
+            --env APP_VERSION="$version" --env APP_COMMIT="${{ github.sha }}"
+      - name: Verify production is healthy and serving this commit
+        env:
+          API: ${{ vars.PRODUCTION_API_URL }}
+        run: |
+          for _ in $(seq 1 20); do
+            body=$(curl -sf "$API/api/v1/health" || true)
+            echo "$body" | grep -q '"status":"ok"' && echo "$body" | grep -q "${{ github.sha }}" && { echo "Healthy: $body"; exit 0; }
+            sleep 6
+          done
+          echo "::error::Production did not report healthy with commit ${{ github.sha }}. Last response: $body"
+          exit 1
