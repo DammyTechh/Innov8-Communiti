@@ -31,7 +31,9 @@ def web_login(origin):
                json.dumps({'email': E, 'password': 'Secret123'}).encode())
     return h.get('set-cookie') or ''
 
-c = web_login('https://app.mycommuniti.org')
+# In CI the API runs on localhost, so the same-site frontend is localhost too.
+# The production pairing (app.mycommuniti.org -> api.mycommuniti.org) is covered by tests/unit/origins.test.ts.
+c = web_login('http://localhost:5173')
 check('communiti_rt=' in c and 'SameSite=Lax' in c and 'HttpOnly' in c and 'Path=/api/v1/auth' in c and 'Domain=' not in c,
       'same-site frontend gets a host-only, HttpOnly, SameSite=Lax refresh cookie')
 c = web_login('https://preview-123.vercel.app')

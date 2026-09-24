@@ -16,5 +16,5 @@
     "sourceMap": true,
     "types": ["node"]
   },
-  "include": ["src", "api", "scripts"]
+  "include": ["src", "api", "scripts", "tests/unit", "vitest.config.ts"]
 }
