@@ -1,6 +1,7 @@
 import type { FastifyRequest } from 'fastify';
 import { db, type DbOrTx } from '../db/client.js';
 import { auditLogs } from '../db/schema/index.js';
+import { requestLocation } from './request-context.js';
 
 export interface AuditInput {
   actorId: string | null;
@@ -22,6 +23,7 @@ export async function audit(input: AuditInput, req?: FastifyRequest, tx: DbOrTx 
     before: input.before ?? null,
     after: input.after ?? null,
     ip: req?.ip ?? null,
+    location: req ? requestLocation(req) : null,
     userAgent: req?.headers['user-agent']?.slice(0, 500) ?? null,
   });
 }

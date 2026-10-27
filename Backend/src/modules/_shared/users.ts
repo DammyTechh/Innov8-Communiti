@@ -1,4 +1,4 @@
-import { inArray } from 'drizzle-orm';
+import { inArray, sql } from 'drizzle-orm';
 import { db } from '../../db/client.js';
 import { users } from '../../db/schema/index.js';
 import type { UserSummary } from './dto.js';
@@ -11,6 +11,7 @@ export const userSummaryCols = {
   avatarUrl: users.avatarUrl,
   headline: users.headline,
   memberRole: users.memberRole,
+  verified: sql<boolean>`(${users.verificationStatus} = 'verified')`.as('verified'),
 };
 
 export async function loadUserSummaries(ids: (string | null | undefined)[]) {

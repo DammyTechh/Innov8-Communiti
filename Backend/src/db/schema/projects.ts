@@ -15,6 +15,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { createdAt, pk, timestamps, ts } from './_helpers.js';
 import {
+  communityStatus,
   contractStatus,
   joinRequestStatus,
   ledgerType,
@@ -46,6 +47,10 @@ export const projects = pgTable(
     visibility: visibility().notNull().default('public'),
     memberCount: integer().notNull().default(0),
     featuredAt: ts(),
+    /** Admin moderation state. Suspending also sets `removedAt`, so the item is hidden everywhere. */
+    moderationStatus: communityStatus().notNull().default('active'),
+    moderationReason: text(),
+    moderationUntil: ts(),
     removedAt: ts(),
     deletedAt: ts(),
     ...timestamps(),

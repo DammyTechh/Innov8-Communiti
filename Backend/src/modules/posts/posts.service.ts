@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, lt, sql, type SQL } from 'drizzle-orm';
 import { env } from '../../config/env.js';
 import { db } from '../../db/client.js';
-import { forumMembers, forums, postLikes, postMedia, posts, postTopics, projectMembers, topics, users } from '../../db/schema/index.js';
+import { follows, forumMembers, forums, hiddenPosts, postLikes, postMedia, posts, postTopics, postViews, projectMembers, topics, users } from '../../db/schema/index.js';
 import { Errors } from '../../lib/errors.js';
 import { toCursorPage } from '../../lib/pagination.js';
 import { attachmentsFor, assertOwnedReadyMedia } from '../_shared/media.js';
@@ -18,6 +18,7 @@ const postCols = {
   likeCount: posts.likeCount,
   commentCount: posts.commentCount,
   shareCount: posts.shareCount,
+  viewCount: posts.viewCount,
   editedAt: posts.editedAt,
   createdAt: posts.createdAt,
   author: userSummaryCols,
@@ -25,11 +26,12 @@ const postCols = {
 
 type PostRow = { id: string; forumId: string | null; author: { id: string } } & Record<string, unknown>;
 
-/** Adds media, topics, forum name and viewer state (liked, isMine) to post rows in 4 batched queries. */
+/** Adds media, topics, forum name and viewer state (liked, isMine, followingAuthor) to post rows in 5 batched queries. */
 export async function hydratePosts<T extends PostRow>(rows: T[], viewerId: string) {
   const ids = rows.map((r) => r.id);
   if (!ids.length) return [];
-  const [mediaMap, topicRows, liked, forumRows] = await Promise.all([
+  const authorIds = [...new Set(rows.map((r) => r.author.id))];
+  const [mediaMap, topicRows, liked, forumRows, followed] = await Promise.all([
     attachmentsFor(postMedia, { parent: postMedia.postId, media: postMedia.mediaId, position: postMedia.position }, ids),
     db
       .select({ postId: postTopics.postId, id: topics.id, slug: topics.slug, name: topics.name })
@@ -41,7 +43,9 @@ export async function hydratePosts<T extends PostRow>(rows: T[], viewerId: strin
       const fids = [...new Set(rows.map((r) => r.forumId).filter(Boolean))] as string[];
       return fids.length ? db.select({ id: forums.id, name: forums.name, slug: forums.slug }).from(forums).where(inArray(forums.id, fids)) : [];
     })(),
+    db.select({ id: follows.followingId }).from(follows).where(and(eq(follows.followerId, viewerId), inArray(follows.followingId, authorIds))),
   ]);
+  const followedSet = new Set(followed.map((f) => f.id));
   const likedSet = new Set(liked.map((l) => l.postId));
   return rows.map((r) => ({
     ...r,
@@ -50,17 +54,27 @@ export async function hydratePosts<T extends PostRow>(rows: T[], viewerId: strin
     forum: forumRows.find((f) => f.id === r.forumId) ?? null,
     likedByMe: likedSet.has(r.id),
     isMine: r.author.id === viewerId,
+    followingAuthor: followedSet.has(r.author.id),
     shareUrl: `${env.WEB_URL}/posts/${r.id}`,
   }));
 }
 
-export async function listPosts(viewerId: string, where: SQL | undefined, cursor: string | undefined, limit: number) {
+/** `latest`: newest first. `popular`: most likes + comments first (keyset-paginated on score, then id). */
+export async function listPosts(viewerId: string, where: SQL | undefined, cursor: string | undefined, limit: number, sort: 'latest' | 'popular' = 'latest') {
+  const score = sql`(${posts.likeCount} + ${posts.commentCount})`;
+  let after: SQL | undefined;
+  if (cursor && sort === 'popular') {
+    const [c] = await db.select({ score: sql<number>`${score}` }).from(posts).where(eq(posts.id, cursor));
+    if (c) after = sql`(${score}, ${posts.id}) < (${c.score}, ${cursor}::uuid)`;
+  } else if (cursor) {
+    after = lt(posts.id, cursor);
+  }
   const rows = await db
     .select(postCols)
     .from(posts)
     .innerJoin(users, eq(users.id, posts.authorId))
-    .where(and(visiblePostsFor(viewerId), where, cursor ? lt(posts.id, cursor) : undefined))
-    .orderBy(desc(posts.id))
+    .where(and(visiblePostsFor(viewerId), where, after))
+    .orderBy(...(sort === 'popular' ? [desc(score), desc(posts.id)] : [desc(posts.id)]))
     .limit(limit + 1);
   const page = toCursorPage(rows, limit);
   return { ...page, data: await hydratePosts(page.data, viewerId) };
@@ -88,6 +102,8 @@ export async function createPost(authorId: string, input: CreatePostInput) {
   if (input.forumId) {
     const [m] = await db.select().from(forumMembers).where(and(eq(forumMembers.forumId, input.forumId), eq(forumMembers.userId, authorId)));
     if (!m) throw Errors.forbidden('Join this forum to post in it');
+    const [f] = await db.select({ status: forums.moderationStatus }).from(forums).where(eq(forums.id, input.forumId));
+    if (f?.status === 'restricted') throw Errors.forbidden('This forum is restricted and is not accepting new posts right now');
     audience = audience === 'everyone' ? 'everyone' : 'forum';
   }
   if (input.projectId) {
@@ -97,7 +113,8 @@ export async function createPost(authorId: string, input: CreatePostInput) {
   }
 
   const id = await db.transaction(async (tx) => {
-    await assertOwnedReadyMedia(authorId, input.mediaIds, tx, ['image', 'video']);
+    // Composer: photo / camera (image, video) and the paperclip (document, e.g. a PDF).
+    await assertOwnedReadyMedia(authorId, input.mediaIds, tx, ['image', 'video', 'document']);
     const [p] = await tx
       .insert(posts)
       .values({ authorId, body: input.body.trim(), audience, forumId: input.forumId ?? null, projectId: input.projectId ?? null })
@@ -161,3 +178,27 @@ export async function sharePost(userId: string, postId: string) {
   const [p] = await db.update(posts).set({ shareCount: sql`${posts.shareCount} + 1` }).where(eq(posts.id, postId)).returning({ shareCount: posts.shareCount });
   return { shareUrl: `${env.WEB_URL}/posts/${postId}`, shareCount: p?.shareCount ?? 0 };
 }
+
+/** Counts one view per member (the author's own views are not counted). */
+export async function recordView(viewerId: string, postId: string, authorId: string) {
+  if (authorId === viewerId) return false;
+  return db.transaction(async (tx) => {
+    const [v] = await tx.insert(postViews).values({ postId, userId: viewerId }).onConflictDoNothing().returning();
+    if (v) await tx.update(posts).set({ viewCount: sql`${posts.viewCount} + 1` }).where(eq(posts.id, postId));
+    return Boolean(v);
+  });
+}
+
+/** "Not interested": hide (or un-hide) a post from my feeds. */
+export async function setHidden(userId: string, postId: string, hidden: boolean) {
+  if (hidden) {
+    if (!(await canViewPost(userId, postId))) throw Errors.notFound('Post');
+    await db.insert(hiddenPosts).values({ userId, postId }).onConflictDoNothing();
+  } else {
+    await db.delete(hiddenPosts).where(and(eq(hiddenPosts.userId, userId), eq(hiddenPosts.postId, postId)));
+  }
+}
+
+/** SQL predicate for feeds: posts the viewer has not marked "Not interested". */
+export const notHiddenFor = (viewerId: string) =>
+  sql`not exists (select 1 from ${hiddenPosts} hp where hp.user_id = ${viewerId} and hp.post_id = ${posts}.id)`;

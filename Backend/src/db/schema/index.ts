@@ -7,3 +7,4 @@ export * from './chat.js';
 export * from './explore.js';
 export * from './notifications.js';
 export * from './moderation.js';
+export * from './collaboration.js';

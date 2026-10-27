@@ -358,7 +358,7 @@ export const workspaceRoutes: FastifyPluginAsyncZod = async (app) => {
   app.post('/projects/:id/evaluations', {
     schema: {
       tags,
-      summary: 'Submit an expert evaluation (members with the Expert role)',
+      summary: 'Submit an expert evaluation (verified researchers and professionals)',
       description: 'Scores 1–5 for feasibility, sustainability and novelty, plus written feedback. Optionally tied to a research doc or prototype version.',
       security: auth,
       params: pid,
@@ -368,8 +368,10 @@ export const workspaceRoutes: FastifyPluginAsyncZod = async (app) => {
     handler: async (req, reply) => {
       const me = currentUser(req);
       await requireProjectMember(req.params.id, me);
-      const [u] = await db.select({ memberRole: users.memberRole, fullName: users.fullName }).from(users).where(eq(users.id, me.id));
-      if (u?.memberRole !== 'expert') throw Errors.forbidden('Only experts can submit evaluations');
+      const [u] = await db.select({ memberRole: users.memberRole, fullName: users.fullName, verification: users.verificationStatus }).from(users).where(eq(users.id, me.id));
+      // Legacy "expert" accounts, or researchers / professionals whose role has been verified by an admin.
+      const canEvaluate = u?.memberRole === 'expert' || ((u?.memberRole === 'researcher' || u?.memberRole === 'professional') && u.verification === 'verified');
+      if (!u || !canEvaluate) throw Errors.forbidden('Only verified researchers and professionals can submit expert evaluations');
       if (req.body.researchDocId) await assertTarget(req.params.id, 'research_doc', req.body.researchDocId);
       if (req.body.prototypeVersionId) await assertTarget(req.params.id, 'prototype_version', req.body.prototypeVersionId);
       const row = await db.transaction(async (tx) => {

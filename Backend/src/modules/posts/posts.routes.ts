@@ -19,7 +19,7 @@ export const postRoutes: FastifyPluginAsyncZod = async (app) => {
       tags,
       summary: 'Home feed',
       description:
-        '`for-you`: everything you can see, weighted to people you follow, forums you joined and your interests. `following`: only people you follow (and you). `forums`: posts in forums you joined. Newest first.',
+        '`for-you`: everything you can see, weighted to people you follow, forums you joined and your interests. `following`: only people you follow (and you). `forums`: posts in forums you joined. Newest first. Posts marked "Not interested", posts by blocked people and posts from forums I muted are left out.',
       security: auth,
       querystring: cursorQuery.extend({ tab: z.enum(['for-you', 'following', 'forums']).default('for-you') }),
       response: { 200: cursorPageSchema(postDto) },
@@ -39,7 +39,9 @@ export const postRoutes: FastifyPluginAsyncZod = async (app) => {
                 ${posts.authorId} in ${followed} or ${posts.authorId} = ${me.id} or ${posts.forumId} in ${joined}
                 or exists (select 1 from ${postTopics} pt where pt.post_id = ${posts.id} and pt.topic_id in ${interests})
                 or ${posts.audience} = 'everyone'))`;
-      return svc.listPosts(me.id, where, cursor, limit);
+      const muted = sql`(select ${forumMembers.forumId} from ${forumMembers} where ${forumMembers.userId} = ${me.id} and ${forumMembers.mutedAt} is not null)`;
+      const notMuted = sql`(${posts.forumId} is null or ${posts.forumId} not in ${muted})`;
+      return svc.listPosts(me.id, and(where, svc.notHiddenFor(me.id), notMuted), cursor, limit);
     },
   });
 
@@ -51,8 +53,29 @@ export const postRoutes: FastifyPluginAsyncZod = async (app) => {
   });
 
   app.get('/posts/:id', {
-    schema: { tags, summary: 'Get a post', security: auth, params: idParam, response: { 200: postDto } },
-    handler: async (req) => svc.getPost(currentUser(req).id, req.params.id),
+    schema: { tags, summary: 'Get a post (Post view)', description: 'Opening a post counts one view per member (`viewCount`).', security: auth, params: idParam, response: { 200: postDto } },
+    handler: async (req) => {
+      const me = currentUser(req);
+      const post = await svc.getPost(me.id, req.params.id);
+      const counted = await svc.recordView(me.id, post.id, post.author.id);
+      return counted ? { ...post, viewCount: post.viewCount + 1 } : post;
+    },
+  });
+
+  app.post('/posts/:id/not-interested', {
+    schema: { tags, summary: '"Not interested": hide a post from my feeds', security: auth, params: idParam, response: noContent },
+    handler: async (req, reply) => {
+      await svc.setHidden(currentUser(req).id, req.params.id, true);
+      return reply.status(204).send(null);
+    },
+  });
+
+  app.delete('/posts/:id/not-interested', {
+    schema: { tags, summary: 'Undo "Not interested"', security: auth, params: idParam, response: noContent },
+    handler: async (req, reply) => {
+      await svc.setHidden(currentUser(req).id, req.params.id, false);
+      return reply.status(204).send(null);
+    },
   });
 
   app.patch('/posts/:id', {
@@ -110,7 +133,9 @@ export const postRoutes: FastifyPluginAsyncZod = async (app) => {
       description: 'Each comment has `replyCount`; load replies with GET /comments/{id}/replies.',
       security: auth,
       params: idParam,
-      querystring: cursorQuery.extend({ sort: z.enum(['top', 'newest', 'oldest']).default('top') }),
+      querystring: cursorQuery.extend({
+        sort: z.enum(['latest', 'popular', 'top', 'newest', 'oldest']).default('top').describe('Sort comments: latest (newest first) or popular (most liked). top/newest/oldest still work'),
+      }),
       response: { 200: cursorPageSchema(commentDto) },
     },
     handler: async (req) => comments.listComments(currentUser(req).id, req.params.id, req.query.sort, req.query.cursor, req.query.limit),
@@ -124,10 +149,15 @@ export const postRoutes: FastifyPluginAsyncZod = async (app) => {
       summary: 'Comment on a post, or reply to a comment',
       security: auth,
       params: idParam,
-      body: z.object({ body: z.string().trim().min(1).max(2000), parentId: z.uuid().optional() }),
+      description: 'Text, attachments, or both. Attach images or files: upload with POST /uploads/presign (purpose `comment`), then pass `mediaIds`. Comments from people you blocked (or who blocked you) are not shown.',
+      body: z.object({
+        body: z.string().trim().max(2000).default(''),
+        parentId: z.uuid().optional(),
+        mediaIds: z.array(z.uuid()).max(4).default([]).describe('Up to 4 images/files (purpose `comment`)'),
+      }),
       response: { 201: commentDto },
     },
-    handler: async (req, reply) => reply.status(201).send(await comments.createComment(currentUser(req).id, req.params.id, req.body.body, req.body.parentId)),
+    handler: async (req, reply) => reply.status(201).send(await comments.createComment(currentUser(req).id, req.params.id, req.body.body, req.body.parentId, req.body.mediaIds)),
   });
 
   app.get('/comments/:id/replies', {

@@ -41,6 +41,8 @@ export const posts = pgTable(
     likeCount: integer().notNull().default(0),
     commentCount: integer().notNull().default(0),
     shareCount: integer().notNull().default(0),
+    /** Distinct members who opened the post (GET /posts/{id}), the author excluded. */
+    viewCount: integer().notNull().default(0),
     editedAt: ts(),
     removedAt: ts(), // by moderation
     deletedAt: ts(), // by author
@@ -128,4 +130,49 @@ export const commentLikes = pgTable(
     createdAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.commentId, t.userId] })],
+);
+
+/** Images/files attached to a comment. */
+export const commentMedia = pgTable(
+  'comment_media',
+  {
+    commentId: uuid()
+      .notNull()
+      .references(() => comments.id, { onDelete: 'cascade' }),
+    mediaId: uuid()
+      .notNull()
+      .references(() => media.id, { onDelete: 'cascade' }),
+    position: integer().notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.commentId, t.mediaId] })],
+);
+
+/** One row per member who viewed a post, so `posts.view_count` counts people, not page loads. */
+export const postViews = pgTable(
+  'post_views',
+  {
+    postId: uuid()
+      .notNull()
+      .references(() => posts.id, { onDelete: 'cascade' }),
+    userId: uuid()
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.postId, t.userId] })],
+);
+
+/** "Not interested": posts a member hid from their feeds. */
+export const hiddenPosts = pgTable(
+  'hidden_posts',
+  {
+    userId: uuid()
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    postId: uuid()
+      .notNull()
+      .references(() => posts.id, { onDelete: 'cascade' }),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.postId] })],
 );

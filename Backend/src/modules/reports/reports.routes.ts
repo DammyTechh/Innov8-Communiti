@@ -8,7 +8,11 @@ import { currentUser } from '../../plugins/auth.js';
 import { auth } from '../_shared/dto.js';
 
 export const reportTargetEnum = z.enum(['post', 'comment', 'forum', 'project', 'user', 'message']);
-export const reportReasonEnum = z.enum(['spam', 'scam', 'harassment', 'insults', 'hate', 'misinformation', 'nudity', 'violence', 'other']);
+export const reportReasonEnum = z
+  .enum(['spam', 'scam', 'harassment', 'insults', 'hate', 'misinformation', 'nudity', 'violence', 'intellectual_property', 'other'])
+  .describe(
+    'Report Post options → value: Spam or misleading content → spam · Harassment or bullying → harassment · Hate or abusive content → hate · Intellectual property violation → intellectual_property · Violence or harmful content → violence · False or misleading information → misinformation · Scam or fraudulent activity → scam',
+  );
 
 /** Resolves the owner of reported content so moderators can act on the person, not just the item. */
 export async function ownerOf(targetType: z.infer<typeof reportTargetEnum>, targetId: string): Promise<string | null> {

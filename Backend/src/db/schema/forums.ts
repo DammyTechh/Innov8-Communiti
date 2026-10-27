@@ -1,6 +1,6 @@
 import { index, integer, pgTable, primaryKey, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { createdAt, pk, timestamps, ts } from './_helpers.js';
-import { forumRole, visibility } from './enums.js';
+import { communityStatus, forumRole, visibility } from './enums.js';
 import { topics, users } from './users.js';
 
 export const forums = pgTable(
@@ -17,6 +17,10 @@ export const forums = pgTable(
     visibility: visibility().notNull().default('public'),
     memberCount: integer().notNull().default(0),
     postCount: integer().notNull().default(0),
+    /** Admin moderation state. Suspending also sets `removedAt`, so the item is hidden everywhere. */
+    moderationStatus: communityStatus().notNull().default('active'),
+    moderationReason: text(),
+    moderationUntil: ts(),
     removedAt: ts(),
     deletedAt: ts(),
     ...timestamps(),
@@ -47,6 +51,8 @@ export const forumMembers = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     role: forumRole().notNull().default('member'),
+    /** "Mute notifications & messages" for this forum. */
+    mutedAt: ts(),
     joinedAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.forumId, t.userId] }), index('forum_members_user_idx').on(t.userId)],

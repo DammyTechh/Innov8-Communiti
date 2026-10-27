@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { env } from '../../config/env.js';
 import { randomToken } from '../../lib/crypto.js';
 import { AppError, Errors } from '../../lib/errors.js';
+import { audit } from '../../lib/audit.js';
 import { exchangeGoogleCode, googleAuthUrl, verifyGoogleIdToken } from '../../lib/google.js';
 import { signPurposeToken, verifyPurposeToken } from '../../lib/jwt.js';
 import { currentUser } from '../../plugins/auth.js';
@@ -33,7 +34,8 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
     schema: {
       tags: tag,
       summary: 'Create an account with email and password',
-      description: 'Creates an unverified account and emails a 6-digit code. Retrying with an unverified email updates the details and resends the code.',
+      description:
+        'Create account screen: full name, email, location, password, confirm password, terms. Creates an unverified account and emails a 6-digit code (then POST /auth/verify-email). Retrying with an unverified email updates the details and resends the code. After sign-in, GET /me/onboarding says which onboarding screen comes next.',
       body: S.registerBody,
       response: { 201: S.verificationPending },
     },
@@ -128,7 +130,9 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
     onRequest: [app.authenticate],
     schema: { tags: tag, summary: 'Sign out of this device', security: [{ bearerAuth: [] }], response: noContent },
     handler: async (req, reply) => {
-      await revokeSession(currentUser(req).sessionId, 'logout');
+      const me = currentUser(req);
+      await revokeSession(me.sessionId, 'logout');
+      await audit({ actorId: me.id, action: 'auth.logout', entityType: 'user', entityId: me.id }, req);
       clearRefreshCookie(req, reply);
       return reply.status(204).send(null);
     },
@@ -138,7 +142,9 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
     onRequest: [app.authenticate],
     schema: { tags: tag, summary: 'Sign out of every device', security: [{ bearerAuth: [] }], response: noContent },
     handler: async (req, reply) => {
-      await revokeAllSessions(currentUser(req).id, 'logout_all');
+      const me = currentUser(req);
+      await revokeAllSessions(me.id, 'logout_all');
+      await audit({ actorId: me.id, action: 'auth.logout_all', entityType: 'user', entityId: me.id }, req);
       clearRefreshCookie(req, reply);
       return reply.status(204).send(null);
     },

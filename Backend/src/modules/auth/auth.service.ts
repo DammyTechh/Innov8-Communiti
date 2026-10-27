@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { FastifyRequest } from 'fastify';
 import { db } from '../../db/client.js';
 import { sessions, userSettings, users } from '../../db/schema/index.js';
@@ -11,6 +11,7 @@ import { burnPasswordCheck, hashPassword, verifyPassword } from '../../lib/passw
 import { slugify } from '../../lib/slug.js';
 import { hasRole } from '../../plugins/auth.js';
 import { requestMeta } from '../../lib/request-context.js';
+import { notify } from '../notifications/notifications.service.js';
 import { consumeOtp, issueOtp, otpCooldown, OTP_TTL_SECONDS } from './otp.service.js';
 import { revokeAllSessions, startSession } from './session.service.js';
 
@@ -30,6 +31,7 @@ export function toAuthUser(u: UserRow) {
     avatarUrl: u.avatarUrl,
     headline: u.headline,
     memberRole: u.memberRole,
+    verificationStatus: u.verificationStatus,
     platformRole: u.platformRole,
     status: u.status,
     onboardingComplete: Boolean(u.onboardingCompletedAt),
@@ -84,9 +86,23 @@ async function alertIfNewDevice(req: FastifyRequest, u: UserRow) {
   await sendMailSafe(u.email, templates.newSignIn({ name: u.fullName.split(' ')[0]!, device, ip: meta.ip, when: new Date().toUTCString() }));
 }
 
+const roleLabels = { member: 'Member', moderator: 'Moderator', admin: 'Admin', super_admin: 'Super admin' } as const;
+
+/** Admin dashboard bell: tells the other admins when a staff member signs in to the dashboard. */
+async function notifyStaffLogin(u: UserRow) {
+  const admins = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(inArray(users.platformRole, ['admin', 'super_admin']), isNull(users.deletedAt)));
+  await notify(
+    admins.map((a) => a.id),
+    { type: 'admin_activity', actorId: u.id, targetType: 'user', targetId: u.id, title: roleLabels[u.platformRole], body: `${u.fullName} logged into the admin dashboard`, push: false },
+  );
+}
+
 // ── Email + password ─────────────────────────────────────────────────────────
 
-export async function register(input: { fullName: string; email: string; password: string }) {
+export async function register(input: { fullName: string; email: string; password: string; location?: string }) {
   const existing = await findByEmail(input.email);
   if (existing?.emailVerifiedAt) throw Errors.conflict('An account with this email already exists. Sign in instead.', 'EMAIL_TAKEN');
 
@@ -96,7 +112,7 @@ export async function register(input: { fullName: string; email: string; passwor
     // Unverified sign-up retried: take the latest details and resend the code.
     [user] = (await db
       .update(users)
-      .set({ fullName: input.fullName, passwordHash, acceptedTermsAt: new Date().toISOString() })
+      .set({ fullName: input.fullName, passwordHash, acceptedTermsAt: new Date().toISOString(), ...(input.location ? { location: input.location } : {}) })
       .where(eq(users.id, existing.id))
       .returning()) as [UserRow];
   } else {
@@ -109,6 +125,7 @@ export async function register(input: { fullName: string; email: string; passwor
         .values({
           email: input.email,
           fullName: input.fullName,
+          location: input.location ?? null,
           passwordHash,
           passwordChangedAt: new Date().toISOString(),
           username,
@@ -183,6 +200,7 @@ export async function login(req: FastifyRequest, email: string, password: string
 
   const tokens = await startSession(req, user);
   await audit({ actorId: user.id, action: opts.requireStaff ? 'auth.admin_login' : 'auth.login', entityType: 'user', entityId: user.id }, req);
+  if (opts.requireStaff) await notifyStaffLogin(user);
   return { tokens, user };
 }
 
@@ -242,7 +260,8 @@ export async function signInWithGoogle(req: FastifyRequest, profile: GoogleProfi
   if (!isNewUser) await alertIfNewDevice(req, user!);
 
   const tokens = await startSession(req, user!);
-  await audit({ actorId: user!.id, action: isNewUser ? 'auth.google_signup' : 'auth.google_login', entityType: 'user', entityId: user!.id }, req);
+  await audit({ actorId: user!.id, action: isNewUser ? 'auth.google_signup' : opts.requireStaff ? 'auth.admin_login' : 'auth.google_login', entityType: 'user', entityId: user!.id }, req);
+  if (opts.requireStaff) await notifyStaffLogin(user!);
   return { tokens, user: user!, isNewUser };
 }
 

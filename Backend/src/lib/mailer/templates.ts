@@ -181,4 +181,71 @@ export const templates = {
     subject: p.title,
     content: { preheader: p.body.slice(0, 90), heading: p.title, paragraphs: [`Hi ${p.name},`, p.body], button: { label: `Open ${env.APP_NAME}`, url: env.WEB_URL } },
   }),
+
+  emailChangeCode: (p: { name: string; code: string; minutes: number }): Template => ({
+    tag: 'emailChangeCode',
+    subject: `${p.code} is your ${env.APP_NAME} email change code`,
+    content: {
+      preheader: `Your code is ${p.code}`,
+      heading: 'Confirm your new email',
+      paragraphs: [`Hi ${p.name}, enter this code to use this address for your ${env.APP_NAME} account.`],
+      code: p.code,
+      footnote: `The code expires in ${p.minutes} minutes. If you did not ask for this, you can ignore this email.`,
+    },
+  }),
+
+  emailChanged: (p: { name: string; newEmail: string; when: string }): Template => ({
+    tag: 'emailChanged',
+    subject: `Your ${env.APP_NAME} email was changed`,
+    content: {
+      preheader: 'Your sign-in email was changed',
+      heading: 'Email changed',
+      paragraphs: [
+        `Hi ${p.name}, the email for your account was changed to ${p.newEmail} on ${p.when}. Use it to sign in from now on.`,
+        'If this was not you, contact support immediately.',
+      ],
+    },
+  }),
+
+  verificationResult: (p: { name: string; role: string; approved: boolean; note?: string | null }): Template => ({
+    tag: 'verificationResult',
+    subject: p.approved ? `You're verified on ${env.APP_NAME}` : `We couldn't verify your ${env.APP_NAME} profile`,
+    content: {
+      preheader: p.approved ? `Your ${p.role} profile is verified` : 'Please review your details',
+      heading: p.approved ? 'You are verified' : 'Verification needs another look',
+      paragraphs: p.approved
+        ? [`Hi ${p.name}, our team reviewed your details and verified your ${p.role} profile. Your profile now shows the verified badge.`]
+        : [`Hi ${p.name}, we could not verify your ${p.role} profile from the details you sent.`, ...(p.note ? [`Reason: ${p.note}`] : []), 'You can update your details in Settings → Account Preferences and submit them again.'],
+      button: { label: p.approved ? 'Open your profile' : 'Update my details', url: `${env.WEB_URL}/settings` },
+    },
+  }),
+
+  collaborationRequest: (p: { name: string; sender: string; message?: string | null; project?: string | null }): Template => ({
+    tag: 'collaborationRequest',
+    subject: `${p.sender} wants to collaborate with you`,
+    content: {
+      preheader: p.message?.slice(0, 90) ?? `${p.sender} sent you a collaboration request`,
+      heading: 'New collaboration request',
+      paragraphs: [`Hi ${p.name}, ${p.sender} wants to collaborate with you${p.project ? ` on ${p.project}` : ''}.`, ...(p.message ? [`"${p.message}"`] : [])],
+      button: { label: 'View request', url: `${env.WEB_URL}/chats?view=requests` },
+    },
+  }),
+
+  maintenance: (p: { name: string; message: string; from: string; to: string; disableAccess: boolean }): Template => ({
+    tag: 'maintenance',
+    subject: `Scheduled maintenance on ${env.APP_NAME}`,
+    content: {
+      preheader: `Maintenance from ${p.from} to ${p.to}`,
+      heading: 'Scheduled maintenance',
+      paragraphs: [
+        `Hi ${p.name},`,
+        p.message,
+        `Starts: ${p.from}`,
+        `Expected to end: ${p.to}`,
+        p.disableAccess
+          ? `${env.APP_NAME} will be unavailable during this time.`
+          : `${env.APP_NAME} stays available, but you may notice errors or slowness during this time.`,
+      ],
+    },
+  }),
 };

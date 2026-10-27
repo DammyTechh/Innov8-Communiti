@@ -52,6 +52,7 @@ async function resolveUser(token: string): Promise<AuthUser> {
       deletedAt: users.deletedAt,
       onboardingCompletedAt: users.onboardingCompletedAt,
       emailVerifiedAt: users.emailVerifiedAt,
+      lastSeenAt: users.lastSeenAt,
     })
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))
@@ -67,6 +68,10 @@ async function resolveUser(token: string): Promise<AuthUser> {
     status = 'active';
   }
   if (status === 'blocked') throw Errors.forbidden('This account has been blocked', 'ACCOUNT_BLOCKED');
+  // Presence ("Online" in chat): refreshed at most once a minute per member.
+  if (!row.lastSeenAt || Date.now() - new Date(row.lastSeenAt).getTime() > 60_000) {
+    await db.update(users).set({ lastSeenAt: new Date().toISOString() }).where(eq(users.id, row.id));
+  }
   if (status === 'suspended') throw Errors.forbidden('This account is suspended', 'ACCOUNT_SUSPENDED');
 
   return {

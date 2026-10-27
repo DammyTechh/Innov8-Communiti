@@ -14,8 +14,10 @@ export const postDto = z
     likeCount: z.number(),
     commentCount: z.number(),
     shareCount: z.number(),
+    viewCount: z.number().describe('"400,000 Views": distinct members who opened the post'),
     likedByMe: z.boolean(),
-    isMine: z.boolean(),
+    isMine: z.boolean().describe('Show the "user post" sheet (Share, Delete Post) instead of the "posts" sheet'),
+    followingAuthor: z.boolean().describe('Hide the Follow button on Post view when true (or when isMine)'),
     shareUrl: z.string(),
     editedAt: z.string().nullable(),
     createdAt: z.string(),
@@ -31,6 +33,7 @@ export const commentDto = z
     body: z.string(),
     likeCount: z.number(),
     replyCount: z.number(),
+    media: z.array(mediaDto).describe('Images / files attached to the comment'),
     likedByMe: z.boolean(),
     isMine: z.boolean(),
     isDeleted: z.boolean(),
@@ -45,7 +48,10 @@ export const createPostBody = z.object({
   body: z.string().max(5000).default(''),
   mediaIds: z.array(z.uuid()).max(10).default([]),
   topicIds: z.array(z.uuid()).max(5).default([]),
-  audience: z.enum(['everyone', 'followers', 'forum', 'project']).default('everyone').describe('Figma composer "Everyone" dropdown'),
+  audience: z
+    .enum(['everyone', 'followers', 'forum', 'project'])
+    .default('everyone')
+    .describe('Composer dropdown: "Everyone" → everyone, "Following" → followers (only people who follow you see it)'),
   forumId: z.uuid().optional(),
   projectId: z.uuid().optional(),
 });

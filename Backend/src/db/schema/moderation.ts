@@ -1,4 +1,4 @@
-import { index, jsonb, pgTable, text, uuid } from 'drizzle-orm/pg-core';
+import { index, integer, jsonb, pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import { createdAt, pk, ts } from './_helpers.js';
 import { moderationActionType, reportReason, reportStatus, reportTarget } from './enums.js';
 import { users } from './users.js';
@@ -7,6 +7,8 @@ export const reports = pgTable(
   'reports',
   {
     id: pk(),
+    /** Short sequential number shown in the dashboard ("Report #2341"). */
+    number: integer().generatedAlwaysAsIdentity(),
     reporterId: uuid()
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
@@ -60,8 +62,10 @@ export const auditLogs = pgTable(
     before: jsonb(),
     after: jsonb(),
     ip: text(),
+    /** City, region, country from the edge (Vercel geo headers) when available. */
+    location: text(),
     userAgent: text(),
     createdAt: createdAt(),
   },
-  (t) => [index('audit_logs_created_idx').on(t.id), index('audit_logs_actor_idx').on(t.actorId)],
+  (t) => [index('audit_logs_created_idx').on(t.id), index('audit_logs_actor_idx').on(t.actorId), index('audit_logs_entity_idx').on(t.entityId)],
 );

@@ -1,8 +1,10 @@
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { db } from '../../db/client.js';
-import { commentLikes, comments, posts, users } from '../../db/schema/index.js';
+import { commentLikes, commentMedia, comments, posts, users } from '../../db/schema/index.js';
 import { Errors } from '../../lib/errors.js';
 import { toCursorPage } from '../../lib/pagination.js';
+import { notBlocked } from '../_shared/blocks.js';
+import { assertOwnedReadyMedia, attachmentsFor } from '../_shared/media.js';
 import { userSummaryCols } from '../_shared/users.js';
 import { notify } from '../notifications/notifications.service.js';
 import { canViewPost } from './posts.access.js';
@@ -25,16 +27,36 @@ const baseQuery = () => db.select(commentCols).from(comments).innerJoin(users, e
 
 async function withViewerState(rows: Row[], viewerId: string) {
   const ids = rows.map((r) => r.id);
-  const liked = ids.length
-    ? new Set((await db.select({ id: commentLikes.commentId }).from(commentLikes).where(and(inArray(commentLikes.commentId, ids), eq(commentLikes.userId, viewerId)))).map((l) => l.id))
-    : new Set<string>();
+  const [liked, media] = await Promise.all([
+    ids.length
+      ? db.select({ id: commentLikes.commentId }).from(commentLikes).where(and(inArray(commentLikes.commentId, ids), eq(commentLikes.userId, viewerId))).then((l) => new Set(l.map((x) => x.id)))
+      : Promise.resolve(new Set<string>()),
+    attachmentsFor(commentMedia, { parent: commentMedia.commentId, media: commentMedia.mediaId, position: commentMedia.position }, ids),
+  ]);
   // Deleted comments that still have replies keep their place as a tombstone.
-  return rows.map(({ deletedAt, ...r }) => ({ ...r, body: deletedAt ? '[deleted]' : r.body, isDeleted: Boolean(deletedAt), likedByMe: liked.has(r.id), isMine: r.author.id === viewerId }));
+  return rows.map(({ deletedAt, ...r }) => ({
+    ...r,
+    body: deletedAt ? '[deleted]' : r.body,
+    media: deletedAt ? [] : (media.get(r.id) ?? []),
+    isDeleted: Boolean(deletedAt),
+    likedByMe: liked.has(r.id),
+    isMine: r.author.id === viewerId,
+  }));
 }
 
-export async function listComments(viewerId: string, postId: string, sort: 'top' | 'newest' | 'oldest', cursor: string | undefined, limit: number) {
+export type CommentSort = 'top' | 'newest' | 'oldest' | 'latest' | 'popular';
+
+export async function listComments(viewerId: string, postId: string, requested: CommentSort, cursor: string | undefined, limit: number) {
   if (!(await canViewPost(viewerId, postId))) throw Errors.notFound('Post');
-  const base = and(eq(comments.postId, postId), isNull(comments.parentId), isNull(comments.removedAt), or(isNull(comments.deletedAt), sql`${comments.replyCount} > 0`));
+  // Design labels: Latest = newest, Popular = top.
+  const sort = requested === 'latest' ? 'newest' : requested === 'popular' ? 'top' : requested;
+  const base = and(
+    eq(comments.postId, postId),
+    isNull(comments.parentId),
+    isNull(comments.removedAt),
+    or(isNull(comments.deletedAt), sql`${comments.replyCount} > 0`),
+    notBlocked(viewerId, sql`${comments}.author_id`),
+  );
 
   let rows: Row[];
   if (sort === 'top') {
@@ -58,14 +80,15 @@ export async function listReplies(viewerId: string, commentId: string, cursor: s
   // A comment removed by moderation takes its whole thread with it.
   if (!parent || parent.removedAt || !(await canViewPost(viewerId, parent.postId))) throw Errors.notFound('Comment');
   const rows = await baseQuery()
-    .where(and(eq(comments.parentId, commentId), isNull(comments.deletedAt), isNull(comments.removedAt), cursor ? sql`${comments.id} > ${cursor}` : undefined))
+    .where(and(eq(comments.parentId, commentId), isNull(comments.deletedAt), isNull(comments.removedAt), notBlocked(viewerId, sql`${comments}.author_id`), cursor ? sql`${comments.id} > ${cursor}` : undefined))
     .orderBy(asc(comments.id))
     .limit(limit + 1);
   const page = toCursorPage(rows, limit);
   return { ...page, data: await withViewerState(page.data, viewerId) };
 }
 
-export async function createComment(userId: string, postId: string, body: string, parentId?: string) {
+export async function createComment(userId: string, postId: string, body: string, parentId?: string, mediaIds: string[] = []) {
+  if (!body.trim() && !mediaIds.length) throw Errors.validation('Write a comment or attach a file', { body: 'Required' });
   if (!(await canViewPost(userId, postId))) throw Errors.notFound('Post');
   let parentAuthor: string | null = null;
   if (parentId) {
@@ -76,7 +99,9 @@ export async function createComment(userId: string, postId: string, body: string
     parentAuthor = p.authorId;
   }
   const id = await db.transaction(async (tx) => {
+    const files = await assertOwnedReadyMedia(userId, mediaIds, tx, ['image', 'document']);
     const [c] = await tx.insert(comments).values({ postId, authorId: userId, body: body.trim(), parentId: parentId ?? null }).returning({ id: comments.id });
+    if (files.length) await tx.insert(commentMedia).values(files.map((f, position) => ({ commentId: c!.id, mediaId: f.id, position })));
     await tx.update(posts).set({ commentCount: sql`${posts.commentCount} + 1` }).where(eq(posts.id, postId));
     if (parentId) await tx.update(comments).set({ replyCount: sql`${comments.replyCount} + 1` }).where(eq(comments.id, parentId));
     return c!.id;
@@ -86,7 +111,7 @@ export async function createComment(userId: string, postId: string, body: string
     db.select({ authorId: posts.authorId }).from(posts).where(eq(posts.id, postId)),
     db.select({ fullName: users.fullName }).from(users).where(eq(users.id, userId)),
   ]);
-  const snippet = body.trim().slice(0, 120);
+  const snippet = body.trim().slice(0, 120) || 'Sent an attachment';
   if (parentAuthor) await notify([parentAuthor], { type: 'comment_reply', actorId: userId, targetType: 'post', targetId: postId, title: `${actor?.fullName} replied to your comment`, body: snippet, data: { commentId: id } });
   if (post && post.authorId !== parentAuthor) await notify([post.authorId], { type: 'post_comment', actorId: userId, targetType: 'post', targetId: postId, title: `${actor?.fullName} commented on your post`, body: snippet, data: { commentId: id } });
 

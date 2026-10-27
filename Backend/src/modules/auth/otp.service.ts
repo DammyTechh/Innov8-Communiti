@@ -5,7 +5,7 @@ import { otpCodes } from '../../db/schema/index.js';
 import { randomOtp, safeEqual, sha256 } from '../../lib/crypto.js';
 import { AppError, Errors } from '../../lib/errors.js';
 
-export type OtpPurpose = 'verify_email' | 'password_reset';
+export type OtpPurpose = 'verify_email' | 'password_reset' | 'email_change';
 
 export const OTP_TTL_SECONDS = 10 * 60;
 export const OTP_RESEND_COOLDOWN_SECONDS = 60;

@@ -143,7 +143,7 @@ mod=call('POST','/auth/admin/login',body={'email':'tunde@example.com','password'
 call('POST',f'/admin/users/{x_id}/status',mod,{'action':'block'},expect=403)   # moderators can't block
 call('POST',f'/admin/users/{adm_id}/status',mod,{'action':'warn'},expect=403)  # can't act on higher role
 call('POST',f'/admin/users/{x_id}/status',mod,{'action':'warn','reason':'Be kind'})
-call('POST','/admin/events',mod,{'title':'Moderator attempt','startsAt':'2026-10-02T17:00:00Z','endsAt':'2026-10-03T17:00:00Z'},expect=403)
+call('POST','/admin/events',mod,{'title':'Moderator attempt','startsAt':'2026-10-02T17:00:00Z','endsAt':'2026-10-03T17:00:00Z','registrationUrl':'https://example.com/r'},expect=403)
 call('POST',f"/admin/content/comment/{c['id']}/remove",mod,{'note':'off-topic'},expect=204)
 call('GET',f"/comments/{c['id']}/replies",chi,expect=404)
 call('GET','/admin/broadcasts',adm)

@@ -111,19 +111,19 @@ END $$;
 --> statement-breakpoint
 
 -- Seed: interest topics (Figma "Feed customization" + project tags) -----------
-INSERT INTO public.topics (slug, name, sort_order) VALUES
-  ('ai-ml', 'Artificial Intelligence & Machine Learning', 1),
-  ('entrepreneurship', 'Entrepreneurship & Startups', 2),
-  ('social-impact', 'Social Impact & Community Development', 3),
-  ('manufacturing', 'Manufacturing & Industry 4.0', 4),
-  ('cybersecurity', 'Cybersecurity & Digital Trust', 5),
-  ('robotics', 'Robotics & Automation', 6),
-  ('smart-cities', 'Smart Cities & Infrastructure', 7),
-  ('fintech', 'FinTech & Digital Finance', 8),
-  ('iot', 'Internet of Things (IoT)', 9),
-  ('agriculture', 'Agriculture & AgriTech', 10),
-  ('sustainability', 'Sustainability & Climate', 11),
-  ('healthtech', 'HealthTech', 12),
-  ('edtech', 'Education & EdTech', 13),
-  ('energy', 'Renewable Energy', 14)
+INSERT INTO public.topics (slug, name, description, sort_order) VALUES
+  ('ai-ml', 'Artificial Intelligence & Machine Learning', 'AI, machine learning, data science and automation', 1),
+  ('entrepreneurship', 'Entrepreneurship & Startups', 'Founding, funding and growing ventures', 2),
+  ('social-impact', 'Social Impact & Community Development', 'Inclusion, livelihoods and community projects', 3),
+  ('manufacturing', 'Manufacturing & Industry 4.0', 'Production, hardware and smart factories', 4),
+  ('cybersecurity', 'Cybersecurity & Digital Trust', 'Security, privacy and safe digital services', 5),
+  ('robotics', 'Robotics & Automation', 'Robots, drones and automated systems', 6),
+  ('smart-cities', 'Smart Cities & Infrastructure', 'Mobility, housing, utilities and urban tech', 7),
+  ('fintech', 'FinTech & Digital Finance', 'Payments, lending, savings and financial inclusion', 8),
+  ('iot', 'Internet of Things (IoT)', 'Sensors, connected devices and embedded systems', 9),
+  ('agriculture', 'Agriculture & AgriTech', 'Farming, agritech, food security and more', 10),
+  ('sustainability', 'Sustainability & Climate', 'Clean energy, climate action, circular economy', 11),
+  ('healthtech', 'HealthTech', 'Digital health, diagnostics and care delivery', 12),
+  ('edtech', 'Education & EdTech', 'Learning, skills, research and development', 13),
+  ('energy', 'Renewable Energy', 'Solar, wind, storage and off-grid power', 14)
 ON CONFLICT (slug) DO NOTHING;

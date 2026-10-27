@@ -1,6 +1,7 @@
 import { and, eq, isNull, sql, type SQL } from 'drizzle-orm';
 import { db } from '../../db/client.js';
 import { follows, forumMembers, forums, posts, projectMembers } from '../../db/schema/index.js';
+import { notBlocked } from '../_shared/blocks.js';
 
 /**
  * SQL predicate: posts the viewer is allowed to see.
@@ -9,6 +10,7 @@ import { follows, forumMembers, forums, posts, projectMembers } from '../../db/s
  *  - forum: the viewer is a member (or the forum is public)
  *  - project: the viewer is a project member
  *  - the author always sees their own posts
+ *  - never posts by someone the viewer blocked, or who blocked the viewer
  */
 export function visiblePostsFor(viewerId: string): SQL {
   const followed = sql`(select ${follows.followingId} from ${follows} where ${follows.followerId} = ${viewerId})`;
@@ -18,6 +20,7 @@ export function visiblePostsFor(viewerId: string): SQL {
   return and(
     isNull(posts.deletedAt),
     isNull(posts.removedAt),
+    notBlocked(viewerId, sql`${posts}.author_id`),
     sql`(
       ${posts.authorId} = ${viewerId}
       or (${posts.audience} = 'everyone' and (${posts.forumId} is null or ${posts.forumId} in ${publicForums} or ${posts.forumId} in ${joinedForums}))

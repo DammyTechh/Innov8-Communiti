@@ -3,10 +3,11 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { env } from '../../config/env.js';
 import { db } from '../../db/client.js';
-import { comments, eventRsvps, events, forums, otpCodes, posts, projects, sessions, users } from '../../db/schema/index.js';
+import { collaborationRequests, comments, eventRsvps, events, forums, hiddenPosts, memberVerifications, otpCodes, posts, projects, sessions, userBlocks, users } from '../../db/schema/index.js';
 import { safeEqual } from '../../lib/crypto.js';
 import { Errors } from '../../lib/errors.js';
 import { templates } from '../../lib/mailer/index.js';
+import { drainBroadcasts } from '../admin/admin.broadcast.js';
 import { emailUsers } from '../notifications/notifications.service.js';
 
 const daysAgo = (d: number) => new Date(Date.now() - d * 86_400_000).toISOString();
@@ -26,6 +27,14 @@ async function purgeDeletedAccounts() {
       await tx.update(projects).set({ deletedAt: now }).where(and(eq(projects.ownerId, id), isNull(projects.deletedAt)));
       await tx.update(forums).set({ deletedAt: now }).where(and(eq(forums.ownerId, id), isNull(forums.deletedAt)));
       await tx.delete(sessions).where(eq(sessions.userId, id));
+      // Role verification (institutional / work emails, ORCID, evidence files), blocks and pending requests are personal data too.
+      await tx.delete(memberVerifications).where(eq(memberVerifications.userId, id));
+      await tx.delete(userBlocks).where(or(eq(userBlocks.blockerId, id), eq(userBlocks.blockedId, id)));
+      await tx.delete(hiddenPosts).where(eq(hiddenPosts.userId, id));
+      await tx
+        .update(collaborationRequests)
+        .set({ status: 'cancelled', decidedAt: now })
+        .where(and(eq(collaborationRequests.status, 'pending'), or(eq(collaborationRequests.senderId, id), eq(collaborationRequests.recipientId, id))));
       await tx
         .update(users)
         .set({
@@ -40,6 +49,12 @@ async function purgeDeletedAccounts() {
           bio: null,
           dateOfBirth: null,
           country: null,
+          verificationStatus: 'unverified',
+          location: null,
+          phone: null,
+          institutionalEmail: null,
+          researchLink: null,
+          researchEvidence: null,
           deletedAt: now,
           deletionScheduledFor: null,
         })
@@ -71,7 +86,7 @@ export const cronRoutes: FastifyPluginAsyncZod = async (app) => {
     schema: {
       hide: true,
       headers: z.object({ authorization: z.string().optional() }),
-      response: { 200: z.object({ otps: z.number(), sessions: z.number(), reinstated: z.number(), accountsPurged: z.number(), eventReminders: z.number() }) },
+      response: { 200: z.object({ otps: z.number(), sessions: z.number(), reinstated: z.number(), accountsPurged: z.number(), eventReminders: z.number(), broadcastEmails: z.number() }) },
     },
     handler: async (req) => {
       // Vercel Cron sends `Authorization: Bearer $CRON_SECRET`.
@@ -88,10 +103,20 @@ export const cronRoutes: FastifyPluginAsyncZod = async (app) => {
         .set({ status: 'active', statusUntil: null, statusReason: null })
         .where(and(inArray(users.status, ['suspended', 'restricted']), isNotNull(users.statusUntil), lt(users.statusUntil, new Date().toISOString())))
         .returning({ id: users.id });
+      // Timed forum/project suspensions and restrictions end: back to active and visible again.
+      const now = new Date().toISOString();
+      for (const table of [forums, projects]) {
+        await db
+          .update(table)
+          .set({ moderationStatus: 'active', moderationUntil: null, moderationReason: null, removedAt: null })
+          .where(and(inArray(table.moderationStatus, ['suspended', 'restricted']), isNotNull(table.moderationUntil), lt(table.moderationUntil, now)));
+      }
       const accountsPurged = await purgeDeletedAccounts();
       const eventReminders = await sendEventReminders();
-      req.log.info({ otps: otps.length, sessions: expired.length, reinstated: reinstated.length, accountsPurged, eventReminders }, 'cron cleanup done');
-      return { otps: otps.length, sessions: expired.length, reinstated: reinstated.length, accountsPurged, eventReminders };
+      // Broadcast emails still queued (a send that outgrew its request) go out here.
+      const broadcastEmails = await drainBroadcasts({ budgetMs: 15_000 });
+      req.log.info({ otps: otps.length, sessions: expired.length, reinstated: reinstated.length, accountsPurged, eventReminders, broadcastEmails }, 'cron cleanup done');
+      return { otps: otps.length, sessions: expired.length, reinstated: reinstated.length, accountsPurged, eventReminders, broadcastEmails };
     },
   });
 };

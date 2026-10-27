@@ -8,6 +8,7 @@ import {
   otpPurpose,
   platformRole,
   profileVisibility,
+  verificationStatus,
   themePref,
   userStatus,
 } from './enums.js';
@@ -28,12 +29,21 @@ export const users = pgTable(
     headline: text(),
     bio: text(),
     memberRole: memberRole(),
+    /** Role verification (onboarding forms), reviewed by admins. */
+    verificationStatus: verificationStatus().notNull().default('unverified'),
     platformRole: platformRole().notNull().default('member'),
     status: userStatus().notNull().default('active'),
     statusReason: text(),
     statusUntil: ts(),
     dateOfBirth: date({ mode: 'string' }),
     country: text(),
+    /** Free-text location shown on the profile and in the admin user panel, e.g. "Lugbe, Abuja, Nigeria". */
+    location: text(),
+    phone: text(),
+    /** Expert verification details (shown to admins). */
+    institutionalEmail: text(),
+    researchLink: text(),
+    researchEvidence: text(),
     openToCollaborate: boolean().notNull().default(false),
     onboardingCompletedAt: ts(),
     acceptedTermsAt: ts(),
@@ -79,6 +89,8 @@ export const topics = pgTable('topics', {
   id: pk(),
   slug: text().notNull().unique(),
   name: text().notNull(),
+  /** Short line under the name in topic pickers, e.g. "Farming, agritech, food security and more". */
+  description: text().notNull().default(''),
   sortOrder: integer().notNull().default(0),
   createdAt: createdAt(),
 });
@@ -171,4 +183,43 @@ export const searchHistory = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index('search_history_user_idx').on(t.userId, t.createdAt)],
+);
+
+/**
+ * The role-specific onboarding form (Researcher, Innovator, Professional, Learner).
+ * One row per member: re-submitting replaces it and sends it back for review.
+ */
+export const memberVerifications = pgTable(
+  'member_verifications',
+  {
+    userId: uuid()
+      .primaryKey()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    memberRole: memberRole().notNull(),
+    details: jsonb().$type<Record<string, unknown>>().notNull().default({}),
+    /** Uploaded evidence (purpose `verification`), all private. */
+    mediaIds: uuid().array().notNull().default(sql`'{}'::uuid[]`),
+    status: verificationStatus().notNull().default('pending'),
+    submittedAt: ts().notNull().defaultNow(),
+    reviewedAt: ts(),
+    reviewedById: uuid().references(() => users.id, { onDelete: 'set null' }),
+    reviewNote: text(),
+    ...timestamps(),
+  },
+  (t) => [index('member_verifications_status_idx').on(t.status, t.submittedAt)],
+);
+
+/** Member-to-member blocks ("Block (user)" on a post). Hides content and stops contact both ways. */
+export const userBlocks = pgTable(
+  'user_blocks',
+  {
+    blockerId: uuid()
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    blockedId: uuid()
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.blockerId, t.blockedId] }), index('user_blocks_blocked_idx').on(t.blockedId), check('user_blocks_not_self', sql`${t.blockerId} <> ${t.blockedId}`)],
 );

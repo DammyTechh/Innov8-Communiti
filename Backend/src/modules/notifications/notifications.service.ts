@@ -1,7 +1,7 @@
-import { and, count, desc, eq, inArray, isNull, lt } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, isNull, lt, or } from 'drizzle-orm';
 import { env } from '../../config/env.js';
 import { db } from '../../db/client.js';
-import { notifications, pushTokens, userSettings, users } from '../../db/schema/index.js';
+import { notifications, pushTokens, userBlocks, userSettings, users } from '../../db/schema/index.js';
 import { logger } from '../../lib/logger.js';
 import { sendMailSafe, type Template } from '../../lib/mailer/index.js';
 import { broadcast } from '../../lib/realtime.js';
@@ -25,7 +25,11 @@ export type NotificationType =
   | 'message'
   | 'event_reminder'
   | 'moderation'
-  | 'broadcast';
+  | 'broadcast'
+  | 'admin_activity'
+  | 'collaboration_request'
+  | 'collaboration_accepted'
+  | 'verification';
 
 export interface NotifyInput {
   type: NotificationType;
@@ -46,8 +50,18 @@ export interface NotifyInput {
  * Users can turn a type off per channel in settings.notificationPrefs[type].
  */
 export async function notify(userIds: string[], input: NotifyInput) {
-  const recipients = [...new Set(userIds)].filter((id) => id && id !== input.actorId);
+  let recipients = [...new Set(userIds)].filter((id) => id && id !== input.actorId);
   if (!recipients.length) return;
+  // Nobody is notified about someone they blocked, or who blocked them.
+  if (input.actorId) {
+    const blocked = await db
+      .select({ a: userBlocks.blockerId, b: userBlocks.blockedId })
+      .from(userBlocks)
+      .where(or(and(eq(userBlocks.blockedId, input.actorId), inArray(userBlocks.blockerId, recipients)), and(eq(userBlocks.blockerId, input.actorId), inArray(userBlocks.blockedId, recipients))));
+    const skip = new Set(blocked.map((r) => (r.a === input.actorId ? r.b : r.a)));
+    recipients = recipients.filter((id) => !skip.has(id));
+    if (!recipients.length) return;
+  }
 
   const prefs = await db
     .select({ userId: userSettings.userId, prefs: userSettings.notificationPrefs })

@@ -11,7 +11,7 @@ import { cursorPageSchema, cursorQuery, toCursorPage } from '../../lib/paginatio
 import { uniqueSlug } from '../../lib/slug.js';
 import { currentUser } from '../../plugins/auth.js';
 import { auth, idParam, noContent, topicDto, userSummary } from '../_shared/dto.js';
-import { userSummaryCols } from '../_shared/users.js';
+import { loadUserSummaries, userSummaryCols } from '../_shared/users.js';
 import { emailUsers, notify } from '../notifications/notifications.service.js';
 import { addLedger, addProjectMember, projectAccess, removeProjectMember } from './projects.access.js';
 
@@ -19,7 +19,7 @@ const tags = ['Projects'];
 const roleEnum = z.enum(['owner', 'admin', 'contributor', 'viewer']);
 const statusEnum = z.enum(['open', 'ongoing', 'completed', 'archived']);
 
-const projectCard = z
+export const projectCard = z
   .object({
     id: z.uuid(),
     title: z.string(),
@@ -30,7 +30,8 @@ const projectCard = z
     visibility: z.enum(['public', 'private']),
     memberCount: z.number(),
     topics: z.array(topicDto),
-    owner: userSummary,
+    owner: userSummary.describe('"By Dr Joseph Feranmi"'),
+    memberAvatars: z.array(userSummary).describe('First 4 members for the avatar stack ("12 members" = memberCount)'),
     myRole: roleEnum.nullable(),
     createdAt: z.string(),
   })
@@ -65,16 +66,23 @@ const projectBody = z.object({
   topicIds: z.array(z.uuid()).max(5).default([]),
 });
 
-async function cards(rows: (typeof projects.$inferSelect)[], viewerId: string) {
+export async function cards(rows: (typeof projects.$inferSelect)[], viewerId: string) {
   const ids = rows.map((r) => r.id);
   if (!ids.length) return [];
-  const [topicRows, mine, owners] = await Promise.all([
+  const [topicRows, mine, owners, avatars] = await Promise.all([
     db.select({ projectId: projectTopics.projectId, id: topics.id, slug: topics.slug, name: topics.name }).from(projectTopics).innerJoin(topics, eq(topics.id, projectTopics.topicId)).where(inArray(projectTopics.projectId, ids)),
     db.select().from(projectMembers).where(and(inArray(projectMembers.projectId, ids), eq(projectMembers.userId, viewerId))),
     db.select(userSummaryCols).from(users).where(inArray(users.id, [...new Set(rows.map((r) => r.ownerId))])),
+    db.execute<{ project_id: string; user_id: string }>(sql`
+      select project_id, user_id from (
+        select pm.project_id, pm.user_id, row_number() over (partition by pm.project_id order by pm.joined_at) as n
+        from ${projectMembers} pm where pm.project_id in (${sql.join(ids.map((id) => sql`${id}::uuid`), sql`, `)})
+      ) x where n <= 4`),
   ]);
+  const people = await loadUserSummaries([...avatars].map((a) => a.user_id));
   return rows.map((p) => ({
     ...p,
+    memberAvatars: [...avatars].filter((a) => a.project_id === p.id).map((a) => people.get(a.user_id)).filter((u): u is NonNullable<typeof u> => Boolean(u)),
     topics: topicRows.filter((t) => t.projectId === p.id).map(({ projectId: _p, ...t }) => t),
     owner: owners.find((o) => o.id === p.ownerId)!,
     myRole: mine.find((m) => m.projectId === p.id)?.role ?? null,
@@ -104,10 +112,11 @@ export const projectRoutes: FastifyPluginAsyncZod = async (app) => {
     schema: {
       tags,
       summary: 'Browse projects',
-      description: '`discover`: public projects you are not in. `joined`: projects you are a member of. `mine`: projects you own.',
+      description:
+        'Tabs: Projects → `all` (every public project plus yours), My Projects → `mine` (projects you own) or `joined` (projects you are in). `discover`: public projects you are not in.',
       security: auth,
       querystring: cursorQuery.extend({
-        tab: z.enum(['discover', 'joined', 'mine']).default('discover'),
+        tab: z.enum(['all', 'discover', 'joined', 'mine']).default('discover'),
         q: z.string().trim().max(80).optional(),
         status: statusEnum.optional(),
         topicId: z.uuid().optional(),
@@ -119,7 +128,13 @@ export const projectRoutes: FastifyPluginAsyncZod = async (app) => {
       const { tab, q, status, topicId, cursor, limit } = req.query;
       const mine = sql`(select ${projectMembers.projectId} from ${projectMembers} where ${projectMembers.userId} = ${me.id})`;
       const tabWhere =
-        tab === 'joined' ? sql`${projects.id} in ${mine}` : tab === 'mine' ? eq(projects.ownerId, me.id) : and(eq(projects.visibility, 'public'), sql`${projects.id} not in ${mine}`);
+        tab === 'joined'
+          ? sql`${projects.id} in ${mine}`
+          : tab === 'mine'
+            ? eq(projects.ownerId, me.id)
+            : tab === 'all'
+              ? sql`(${projects.visibility} = 'public' or ${projects.id} in ${mine})`
+              : and(eq(projects.visibility, 'public'), sql`${projects.id} not in ${mine}`);
       const rows = await db
         .select()
         .from(projects)
@@ -328,6 +343,7 @@ export const projectRoutes: FastifyPluginAsyncZod = async (app) => {
       const { project, role } = await projectAccess(req.params.id, me);
       if (role) throw Errors.conflict('You are already a member', 'ALREADY_MEMBER');
       if (project.status === 'completed' || project.status === 'archived') throw Errors.badRequest('This project is not accepting new members');
+      if (project.moderationStatus === 'restricted') throw Errors.forbidden('This project is restricted and is not accepting new members right now');
       const [r] = await db.insert(projectJoinRequests).values({ projectId: project.id, userId: me.id, message: req.body.message ?? null }).onConflictDoNothing().returning();
       if (!r) throw Errors.conflict('Your request is already pending', 'REQUEST_PENDING');
       const [u] = await db.select(userSummaryCols).from(users).where(eq(users.id, me.id));

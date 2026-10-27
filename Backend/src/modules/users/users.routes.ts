@@ -1,13 +1,14 @@
-import { and, desc, eq, inArray, isNull, lt, ne, notInArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, ne, notInArray, sql, type SQL } from 'drizzle-orm';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { db } from '../../db/client.js';
-import { follows, userInterests, userSettings, users } from '../../db/schema/index.js';
+import { collaborationRequests, follows, userBlocks, userInterests, userSettings, users } from '../../db/schema/index.js';
 import { Errors } from '../../lib/errors.js';
 import { contains } from '../../lib/like.js';
 import { cursorPageSchema, cursorQuery } from '../../lib/pagination.js';
 import { currentUser } from '../../plugins/auth.js';
 import { auth, idParam, noContent, userSummary } from '../_shared/dto.js';
+import { assertNotBlocked, blockState, notBlocked } from '../_shared/blocks.js';
 import { userSummaryCols } from '../_shared/users.js';
 import { notify } from '../notifications/notifications.service.js';
 
@@ -18,7 +19,8 @@ const profileDto = userSummary
     bio: z.string().nullable(),
     coverUrl: z.string().nullable(),
     country: z.string().nullable(),
-    openToCollaborate: z.boolean(),
+    location: z.string().nullable(),
+    openToCollaborate: z.boolean().describe('"Open to Collaborations" button'),
     followerCount: z.number(),
     followingCount: z.number(),
     postCount: z.number(),
@@ -27,9 +29,67 @@ const profileDto = userSummary
     followsYou: z.boolean(),
     isMe: z.boolean(),
     isPrivate: z.boolean().describe('True when details are hidden by the profile visibility setting'),
+    blockedByMe: z.boolean().describe('You blocked this person: show Unblock instead of Follow / Message'),
+    collaborationRequest: z
+      .object({ id: z.uuid(), direction: z.enum(['sent', 'received']), status: z.literal('pending') })
+      .nullable()
+      .describe('A pending collaboration request between you and this person, if any'),
     joinedAt: z.string(),
   })
   .meta({ id: 'Profile' });
+
+/** Builds the profile card. Returns 404 when the person blocked the viewer. */
+async function profileOf(viewerId: string, where: SQL) {
+  const [u] = await db
+    .select({ user: users, visibility: userSettings.profileVisibility, verified: userSummaryCols.verified })
+    .from(users)
+    .leftJoin(userSettings, eq(userSettings.userId, users.id))
+    .where(and(where, activeUser))
+    .limit(1);
+  if (!u) throw Errors.notFound('User');
+  const isMe = u.user.id === viewerId;
+  const blocks = isMe ? { blockedByMe: false, blockedMe: false } : await blockState(viewerId, u.user.id);
+  if (blocks.blockedMe) throw Errors.notFound('User');
+  const rel = await relation(viewerId, u.user.id);
+  const hidden = !isMe && u.visibility === 'private' && !rel.isFollowing;
+  const [pending] = isMe
+    ? []
+    : await db
+        .select({ id: collaborationRequests.id, senderId: collaborationRequests.senderId })
+        .from(collaborationRequests)
+        .where(
+          and(
+            eq(collaborationRequests.status, 'pending'),
+            sql`((${collaborationRequests.senderId} = ${viewerId} and ${collaborationRequests.recipientId} = ${u.user.id}) or (${collaborationRequests.senderId} = ${u.user.id} and ${collaborationRequests.recipientId} = ${viewerId}))`,
+          ),
+        )
+        .limit(1);
+  const p = u.user;
+  return {
+    id: p.id,
+    fullName: p.fullName,
+    username: p.username,
+    avatarUrl: p.avatarUrl,
+    headline: p.headline,
+    memberRole: p.memberRole,
+    verified: u.verified,
+    bio: hidden ? null : p.bio,
+    coverUrl: p.coverUrl,
+    country: hidden ? null : p.country,
+    location: hidden ? null : p.location,
+    openToCollaborate: p.openToCollaborate,
+    followerCount: p.followerCount,
+    followingCount: p.followingCount,
+    postCount: p.postCount,
+    collaborationCount: p.collaborationCount,
+    ...rel,
+    isMe,
+    isPrivate: hidden,
+    blockedByMe: blocks.blockedByMe,
+    collaborationRequest: pending ? { id: pending.id, direction: pending.senderId === viewerId ? ('sent' as const) : ('received' as const), status: 'pending' as const } : null,
+    joinedAt: p.createdAt,
+  };
+}
 
 const activeUser = and(isNull(users.deletedAt), ne(users.status, 'blocked'));
 
@@ -46,6 +106,7 @@ async function relation(viewerId: string, otherId: string) {
 /** Follows are kept in a separate table with denormalised counters on users. */
 async function follow(followerId: string, followingId: string) {
   if (followerId === followingId) throw Errors.badRequest('You cannot follow yourself');
+  await assertNotBlocked(followerId, followingId, 'You cannot follow this person');
   const [target] = await db.select({ id: users.id }).from(users).where(and(eq(users.id, followingId), activeUser));
   if (!target) throw Errors.notFound('User');
   const created = await db.transaction(async (tx) => {
@@ -90,7 +151,7 @@ export const userRoutes: FastifyPluginAsyncZod = async (app) => {
       const data = await db
         .select({ ...userSummaryCols, followerCount: users.followerCount })
         .from(users)
-        .where(and(activeUser, ne(users.id, me.id), notInArray(users.id, followed), sql`${users.onboardingCompletedAt} is not null`))
+        .where(and(activeUser, ne(users.id, me.id), notInArray(users.id, followed), sql`${users.onboardingCompletedAt} is not null`, notBlocked(me.id, sql`${users}.id`)))
         .orderBy(desc(shared), desc(users.followerCount))
         .limit(req.query.limit);
       return { data };
@@ -105,39 +166,51 @@ export const userRoutes: FastifyPluginAsyncZod = async (app) => {
       params: z.object({ username: z.string().min(1).max(30) }),
       response: { 200: profileDto },
     },
-    handler: async (req) => {
+    handler: async (req) => profileOf(currentUser(req).id, sql`lower(${users.username}) = lower(${req.params.username})`),
+  });
+
+  app.get('/:id', {
+    schema: { tags, summary: 'Public profile by id ("View Profile")', security: auth, params: idParam, response: { 200: profileDto } },
+    handler: async (req) => profileOf(currentUser(req).id, eq(users.id, req.params.id)),
+  });
+
+  app.post('/:id/block', {
+    schema: {
+      tags,
+      summary: 'Block a member',
+      description:
+        'Post sheet → "Block (user)". Unfollows both ways, cancels pending collaboration requests, and from then on neither of you sees the other\'s posts or comments, and you cannot follow, message or send collaboration requests to each other. Your blocked list: GET /me/blocked-users.',
+      security: auth,
+      params: idParam,
+      response: noContent,
+    },
+    handler: async (req, reply) => {
       const me = currentUser(req);
-      const [u] = await db
-        .select({ user: users, visibility: userSettings.profileVisibility })
-        .from(users)
-        .leftJoin(userSettings, eq(userSettings.userId, users.id))
-        .where(and(sql`lower(${users.username}) = lower(${req.params.username})`, activeUser))
-        .limit(1);
-      if (!u) throw Errors.notFound('User');
-      const rel = await relation(me.id, u.user.id);
-      const isMe = u.user.id === me.id;
-      const hidden = !isMe && u.visibility === 'private' && !rel.isFollowing;
-      const p = u.user;
-      return {
-        id: p.id,
-        fullName: p.fullName,
-        username: p.username,
-        avatarUrl: p.avatarUrl,
-        headline: p.headline,
-        memberRole: p.memberRole,
-        bio: hidden ? null : p.bio,
-        coverUrl: p.coverUrl,
-        country: hidden ? null : p.country,
-        openToCollaborate: p.openToCollaborate,
-        followerCount: p.followerCount,
-        followingCount: p.followingCount,
-        postCount: p.postCount,
-        collaborationCount: p.collaborationCount,
-        ...rel,
-        isMe,
-        isPrivate: hidden,
-        joinedAt: p.createdAt,
-      };
+      const otherId = req.params.id;
+      if (otherId === me.id) throw Errors.badRequest('You cannot block yourself');
+      const [target] = await db.select({ id: users.id }).from(users).where(and(eq(users.id, otherId), isNull(users.deletedAt)));
+      if (!target) throw Errors.notFound('User');
+      await db.insert(userBlocks).values({ blockerId: me.id, blockedId: otherId }).onConflictDoNothing();
+      await unfollow(me.id, otherId);
+      await unfollow(otherId, me.id);
+      await db
+        .update(collaborationRequests)
+        .set({ status: 'cancelled', decidedAt: new Date().toISOString() })
+        .where(
+          and(
+            eq(collaborationRequests.status, 'pending'),
+            sql`((${collaborationRequests.senderId} = ${me.id} and ${collaborationRequests.recipientId} = ${otherId}) or (${collaborationRequests.senderId} = ${otherId} and ${collaborationRequests.recipientId} = ${me.id}))`,
+          ),
+        );
+      return reply.status(204).send(null);
+    },
+  });
+
+  app.delete('/:id/block', {
+    schema: { tags, summary: 'Unblock a member', security: auth, params: idParam, response: noContent },
+    handler: async (req, reply) => {
+      await db.delete(userBlocks).where(and(eq(userBlocks.blockerId, currentUser(req).id), eq(userBlocks.blockedId, req.params.id)));
+      return reply.status(204).send(null);
     },
   });
 
@@ -162,6 +235,7 @@ export const userRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags,
         summary: direction === 'followers' ? 'People who follow this user' : 'People this user follows',
+        description: 'People you blocked, or who blocked you, are left out.',
         security: auth,
         params: idParam,
         querystring: cursorQuery.extend({ q: z.string().max(80).optional() }),
@@ -180,6 +254,7 @@ export const userRoutes: FastifyPluginAsyncZod = async (app) => {
             and(
               eq(self, req.params.id),
               activeUser,
+              notBlocked(currentUser(req).id, sql`${users}.id`),
               q ? sql`${users.fullName} ilike ${contains(q)}` : undefined,
               cursor ? lt(other, cursor) : undefined,
             ),

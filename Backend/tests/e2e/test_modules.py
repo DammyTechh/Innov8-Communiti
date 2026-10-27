@@ -110,7 +110,8 @@ adm=call('POST','/auth/admin/login',body={'email':'admin@communiti.app','passwor
 call('GET','/admin/stats/overview',ada,expect=403)
 print('  overview:',call('GET','/admin/stats/overview',adm))
 call('GET','/admin/stats/user-activity?period=7d',adm)
-e=call('POST','/admin/events',adm,{'title':'Lagos Innovation Meetup','category':'meetup','startsAt':'2026-10-02T17:00:00+01:00','endsAt':'2026-10-02T20:00:00+01:00','city':'Lagos','status':'published'},expect=201)
+import datetime as _dt; _d=(_dt.date.today()+_dt.timedelta(days=30)).isoformat()  # always in the future
+e=call('POST','/admin/events',adm,{'title':'Lagos Innovation Meetup','category':'meetup','startsAt':f'{_d}T17:00:00+01:00','endsAt':f'{_d}T20:00:00+01:00','city':'Lagos','registrationUrl':'https://example.com/register','status':'published'},expect=201)
 call('POST','/admin/events',adm,{'title':'Bad times','startsAt':'2026-10-02T17:00:00Z','endsAt':'2026-10-01T17:00:00Z'},expect=400)
 call('PATCH',f"/admin/events/{e['id']}",adm,{'capacity':100})
 rs=call('PUT',f"/events/{e['id']}/rsvp",tunde,{'status':'going'})

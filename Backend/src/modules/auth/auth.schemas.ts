@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { memberRoleEnum, verificationStatusEnum } from '../_shared/dto.js';
 
 export const email = z
   .email('Enter a valid email address')
@@ -25,7 +26,8 @@ export const authUserDto = z
     username: z.string().nullable(),
     avatarUrl: z.string().nullable(),
     headline: z.string().nullable(),
-    memberRole: z.enum(['innovator', 'researcher', 'expert', 'investor', 'student']).nullable(),
+    memberRole: memberRoleEnum.nullable(),
+    verificationStatus: verificationStatusEnum,
     platformRole: z.enum(['member', 'moderator', 'admin', 'super_admin']),
     status: z.enum(['active', 'flagged', 'restricted', 'suspended', 'blocked']),
     onboardingComplete: z.boolean(),
@@ -59,12 +61,16 @@ export const verificationPending = z
 
 export const accepted = z.object({ message: z.string() }).meta({ id: 'Accepted' });
 
-export const registerBody = z.object({
-  fullName: z.string().trim().min(2, 'Enter your full name').max(80),
-  email,
-  password,
-  acceptTerms: z.literal(true, { error: 'You must accept the terms to continue' }),
-});
+export const registerBody = z
+  .object({
+    fullName: z.string().trim().min(2, 'Enter your full name').max(80),
+    email,
+    location: z.string().trim().min(2, 'Enter your location').max(120).optional().describe('"Input your location", e.g. Lugbe, Abuja'),
+    password,
+    confirmPassword: z.string().max(128).optional().describe('"Confirm password". When sent, it must match `password`'),
+    acceptTerms: z.literal(true, { error: 'You must accept the terms to continue' }),
+  })
+  .refine((b) => b.confirmPassword === undefined || b.confirmPassword === b.password, { message: 'Passwords do not match', path: ['confirmPassword'] });
 
 export const verifyEmailBody = z.object({ email, code: otpCode });
 export const emailOnlyBody = z.object({ email });

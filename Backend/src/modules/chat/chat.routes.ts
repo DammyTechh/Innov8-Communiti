@@ -1,8 +1,10 @@
-import { and, desc, eq, gt, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, ilike, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { db } from '../../db/client.js';
 import { conversationMembers, conversations, follows, messageMedia, messages, projects, userSettings, users } from '../../db/schema/index.js';
+import { assertNotBlocked } from '../_shared/blocks.js';
+import { contains } from '../../lib/like.js';
 import { Errors } from '../../lib/errors.js';
 import { cursorPageSchema, cursorQuery, toCursorPage } from '../../lib/pagination.js';
 import { broadcast } from '../../lib/realtime.js';
@@ -22,6 +24,15 @@ const conversationDto = z
     title: z.string(),
     avatarUrl: z.string().nullable(),
     otherUser: userSummary.nullable(),
+    otherUserProfile: z
+      .object({
+        followerCount: z.number(),
+        collaborationCount: z.number(),
+        online: z.boolean().describe('"Online" under the name: active in the last 2 minutes (false when they hide their online status)'),
+        lastSeenAt: z.string().nullable().describe('null when they hide their online status'),
+      })
+      .nullable()
+      .describe('Direct chats: the profile card at the top of the conversation (followers, collaborations, online)'),
     project: z.object({ id: z.uuid(), title: z.string(), coverUrl: z.string().nullable() }).nullable(),
     lastMessagePreview: z.string().nullable(),
     lastMessageAt: z.string().nullable(),
@@ -63,12 +74,34 @@ async function conversationCards(rows: { conversation: typeof conversations.$inf
   const projectIds = rows.map((r) => r.conversation.projectId).filter(Boolean) as string[];
   const [others, projectRows] = await Promise.all([
     directIds.length
-      ? db.select({ conversationId: conversationMembers.conversationId, user: userSummaryCols }).from(conversationMembers).innerJoin(users, eq(users.id, conversationMembers.userId)).where(and(inArray(conversationMembers.conversationId, directIds), ne(conversationMembers.userId, viewerId)))
+      ? db
+          .select({
+            conversationId: conversationMembers.conversationId,
+            user: userSummaryCols,
+            followerCount: users.followerCount,
+            collaborationCount: users.collaborationCount,
+            lastSeenAt: users.lastSeenAt,
+            showOnline: userSettings.showOnlineStatus,
+          })
+          .from(conversationMembers)
+          .innerJoin(users, eq(users.id, conversationMembers.userId))
+          .leftJoin(userSettings, eq(userSettings.userId, users.id))
+          .where(and(inArray(conversationMembers.conversationId, directIds), ne(conversationMembers.userId, viewerId)))
       : [],
     projectIds.length ? db.select({ id: projects.id, title: projects.title, coverUrl: projects.coverUrl }).from(projects).where(inArray(projects.id, projectIds)) : [],
   ]);
   return rows.map(({ conversation: c, member: m }) => {
-    const other = others.find((o) => o.conversationId === c.id)?.user ?? null;
+    const o = others.find((x) => x.conversationId === c.id);
+    const other = o?.user ?? null;
+    const visible = o && o.showOnline !== false;
+    const otherUserProfile = o
+      ? {
+          followerCount: o.followerCount,
+          collaborationCount: o.collaborationCount,
+          online: Boolean(visible && o.lastSeenAt && Date.now() - new Date(o.lastSeenAt).getTime() < 2 * 60_000),
+          lastSeenAt: visible ? o.lastSeenAt : null,
+        }
+      : null;
     const project = projectRows.find((p) => p.id === c.projectId) ?? null;
     const cleared = m.clearedAt && c.lastMessageAt && m.clearedAt >= c.lastMessageAt;
     return {
@@ -77,6 +110,7 @@ async function conversationCards(rows: { conversation: typeof conversations.$inf
       title: c.kind === 'direct' ? (other?.fullName ?? 'Deleted user') : (project?.title ?? 'Project'),
       avatarUrl: c.kind === 'direct' ? (other?.avatarUrl ?? null) : (project?.coverUrl ?? null),
       otherUser: other,
+      otherUserProfile,
       project,
       lastMessagePreview: cleared ? null : c.lastMessagePreview,
       lastMessageAt: c.lastMessageAt,
@@ -141,6 +175,8 @@ export const chatRoutes: FastifyPluginAsyncZod = async (app) => {
             eq(conversationMembers.userId, me.id),
             // Parenthesised on purpose: drizzle's and() does not wrap raw SQL, so a bare OR would escape the user filter.
             sql`(${conversations.lastMessageAt} is not null or ${conversations.kind} = 'project')`,
+            // "Delete chat" hides it until a newer message arrives.
+            sql`(${conversationMembers.hiddenAt} is null or ${conversations.lastMessageAt} > ${conversationMembers.hiddenAt})`,
             sql`(${conversations.projectId} is null or exists (select 1 from ${projects} p where p.id = ${conversations.projectId} and p.deleted_at is null))`,
             filter === 'direct' || filter === 'project' ? eq(conversations.kind, filter) : undefined,
             filter === 'unread' ? gt(conversationMembers.unreadCount, 0) : undefined,
@@ -178,6 +214,7 @@ export const chatRoutes: FastifyPluginAsyncZod = async (app) => {
       const me = currentUser(req);
       const otherId = req.body.userId;
       if (otherId === me.id) throw Errors.badRequest('You cannot message yourself');
+      await assertNotBlocked(me.id, otherId, 'You cannot message this person');
       const [other] = await db
         .select({ id: users.id, permission: userSettings.messagePermission })
         .from(users)
@@ -222,7 +259,10 @@ export const chatRoutes: FastifyPluginAsyncZod = async (app) => {
       description: 'Live updates: subscribe to the Supabase Realtime private channel `conversation:<id>` (events `message:new`, `message:updated`, `message:deleted`, `read`).',
       security: auth,
       params: idParam,
-      querystring: cursorQuery.extend({ limit: z.coerce.number().int().min(1).max(100).default(30) }),
+      querystring: cursorQuery.extend({
+        limit: z.coerce.number().int().min(1).max(100).default(30),
+        q: z.string().trim().min(1).max(80).optional().describe('"Search in Chat": only messages containing this text'),
+      }),
       response: { 200: cursorPageSchema(messageDto) },
     },
     handler: async (req) => {
@@ -231,7 +271,14 @@ export const chatRoutes: FastifyPluginAsyncZod = async (app) => {
       const rows = await db
         .select()
         .from(messages)
-        .where(and(eq(messages.conversationId, req.params.id), member.clearedAt ? gt(messages.createdAt, member.clearedAt) : undefined, req.query.cursor ? lt(messages.id, req.query.cursor) : undefined))
+        .where(
+          and(
+            eq(messages.conversationId, req.params.id),
+            member.clearedAt ? gt(messages.createdAt, member.clearedAt) : undefined,
+            req.query.q ? and(isNull(messages.deletedAt), ilike(messages.body, contains(req.query.q))) : undefined,
+            req.query.cursor ? lt(messages.id, req.query.cursor) : undefined,
+          ),
+        )
         .orderBy(desc(messages.id))
         .limit(req.query.limit + 1);
       const page = toCursorPage(rows, req.query.limit);
@@ -260,6 +307,10 @@ export const chatRoutes: FastifyPluginAsyncZod = async (app) => {
       const { conversation } = await membership(req.params.id, me.id);
       const b = req.body;
       if (!b.body && !b.mediaIds.length) throw Errors.validation('Write a message or attach a file', { body: 'Required' });
+      if (conversation.kind === 'direct' && conversation.directKey) {
+        const otherId = conversation.directKey.split(':').find((id) => id !== me.id);
+        if (otherId) await assertNotBlocked(me.id, otherId, 'You cannot message this person');
+      }
 
       const row = await db.transaction(async (tx) => {
         const files = await assertOwnedReadyMedia(me.id, b.mediaIds, tx);
@@ -360,11 +411,29 @@ export const chatRoutes: FastifyPluginAsyncZod = async (app) => {
   });
 
   app.delete('/conversations/:id/messages', {
-    schema: { tags, summary: 'Clear chat history for me only', security: auth, params: idParam, response: noContent },
+    schema: { tags, summary: '"Clear conversation history": clear messages for me only (the chat stays in my list)', security: auth, params: idParam, response: noContent },
     handler: async (req, reply) => {
       const me = currentUser(req);
       await membership(req.params.id, me.id);
       await db.update(conversationMembers).set({ clearedAt: new Date().toISOString(), unreadCount: 0 }).where(and(eq(conversationMembers.conversationId, req.params.id), eq(conversationMembers.userId, me.id)));
+      return reply.status(204).send(null);
+    },
+  });
+
+  app.delete('/conversations/:id', {
+    schema: {
+      tags,
+      summary: '"Delete chat history": clear the messages and remove the chat from my list',
+      description: 'For me only. The chat comes back if a new message arrives. To leave a project chat, leave the project (DELETE /projects/{id}/members/{myId}).',
+      security: auth,
+      params: idParam,
+      response: noContent,
+    },
+    handler: async (req, reply) => {
+      const me = currentUser(req);
+      await membership(req.params.id, me.id);
+      const now = new Date().toISOString();
+      await db.update(conversationMembers).set({ clearedAt: now, hiddenAt: now, unreadCount: 0 }).where(and(eq(conversationMembers.conversationId, req.params.id), eq(conversationMembers.userId, me.id)));
       return reply.status(204).send(null);
     },
   });

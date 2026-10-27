@@ -27,6 +27,7 @@ export type ErrorCode =
   | 'UNSUPPORTED_MEDIA'
   | 'RATE_LIMITED'
   | 'SERVICE_UNAVAILABLE'
+  | 'MAINTENANCE'
   | 'INTERNAL';
 
 export class AppError extends Error {

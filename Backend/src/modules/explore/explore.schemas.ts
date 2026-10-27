@@ -1,7 +1,9 @@
 import { z } from 'zod';
-import { mediaDto, userSummary } from '../_shared/dto.js';
+import { mediaDto, topicDto, userSummary } from '../_shared/dto.js';
 
-export const eventCategory = z.enum(['hackathon', 'workshop', 'meetup', 'conference', 'webinar', 'other']);
+export const eventCategory = z
+  .enum(['hackathon', 'workshop', 'bootcamp', 'networking_fair', 'meetup', 'conference', 'webinar', 'other'])
+  .describe('Dashboard event types: hackathon, workshop, bootcamp, networking_fair (Networking / showcase fair)');
 
 export const eventDto = z
   .object({
@@ -20,6 +22,9 @@ export const eventDto = z
     isOnline: z.boolean(),
     meetingUrl: z.string().nullable(),
     registrationUrl: z.string().nullable(),
+    organizerName: z.string().nullable(),
+    organizerLogoUrl: z.string().nullable(),
+    organizerTagline: z.string().nullable(),
     capacity: z.number().nullable(),
     status: z.enum(['draft', 'published', 'cancelled']),
     goingCount: z.number(),
@@ -44,11 +49,16 @@ export const eventFields = z.object({
     isOnline: z.boolean().default(false),
     meetingUrl: z.url().nullable().optional(),
     registrationUrl: z.url().nullable().optional(),
+    organizerName: z.string().trim().max(120).nullable().optional().describe('"Organized by", e.g. Innovation Hub'),
+    organizerLogoUrl: z.url().nullable().optional().describe('Upload with purpose `event`, then pass the publicUrl'),
+    organizerTagline: z.string().trim().max(120).nullable().optional().describe('Line under the organizer name, e.g. Creative Media'),
     capacity: z.number().int().positive().nullable().optional(),
     status: z.enum(['draft', 'published', 'cancelled']).default('draft'),
 });
 
-export const eventBody = eventFields.refine((e) => new Date(e.endsAt) > new Date(e.startsAt), { message: 'End time must be after the start time', path: ['endsAt'] });
+export const eventBody = eventFields
+  .extend({ registrationUrl: z.url('Enter a valid registration link').describe('Required: the Register button opens it') })
+  .refine((e) => new Date(e.endsAt) > new Date(e.startsAt), { message: 'End time must be after the start time', path: ['endsAt'] });
 
 export const featuredDto = z
   .object({
@@ -59,11 +69,23 @@ export const featuredDto = z
     coverUrl: z.string().nullable(),
     projectId: z.uuid().nullable(),
     position: z.number(),
+    topics: z.array(topicDto).describe('Used by "Sort topics"'),
+    media: z.array(mediaDto).describe('Image gallery (thumbnail strip on Featured View)'),
+    shareUrl: z.string().describe('Share button'),
     publishedAt: z.string().nullable(),
     createdAt: z.string(),
   })
   .meta({ id: 'FeaturedInnovation' });
 
 export const highlightDto = z
-  .object({ id: z.uuid(), title: z.string(), caption: z.string(), media: z.array(mediaDto), publishedAt: z.string().nullable(), createdAt: z.string(), createdBy: userSummary.nullable() })
+  .object({
+    id: z.uuid(),
+    title: z.string(),
+    caption: z.string(),
+    event: z.object({ id: z.uuid(), title: z.string(), category: eventCategory, startsAt: z.string(), endsAt: z.string() }).nullable().describe('The past event this album belongs to'),
+    media: z.array(mediaDto),
+    publishedAt: z.string().nullable(),
+    createdAt: z.string(),
+    createdBy: userSummary.nullable(),
+  })
   .meta({ id: 'Highlight' });

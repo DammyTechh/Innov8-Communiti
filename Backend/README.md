@@ -6,7 +6,8 @@ One REST API for the CommUniti member web app, admin dashboard and mobile app.
 
 - Swagger UI: `/api/docs` · OpenAPI JSON: `/api/docs/openapi.json`
 - Base path: `/api/v1`
-- 166 documented operations
+- 209 documented operations
+- Screen-by-screen endpoint guides: [`docs/USER_API.md`](docs/USER_API.md) (member web and mobile apps) and [`docs/ADMIN_API.md`](docs/ADMIN_API.md) (admin dashboard)
 
 ---
 
@@ -33,12 +34,16 @@ Without `SMTP_PASS`, emails are not sent. They are logged instead, including the
 | `db:seed-admin` | Create or promote the first `super_admin` |
 | `openapi:export` | Write `openapi.json` for client codegen or Postman |
 | `mail:test` | Verify Resend SMTP and send one sample of every email template |
-| `test:e2e` | End-to-end suite (359 checks) against a running API |
+| `test:e2e` | End-to-end suite (802 checks) against a running API |
 | `openapi:validate` | Validate `openapi.json` against the OpenAPI 3.1 spec |
 
-## 2. The single migration
+## 2. Migrations
 
-`supabase/migrations/20260924000000_init.sql` is the entire database: 46 tables, enums, keys and indexes.
+`supabase/migrations/20260924000000_init.sql` is the entire database: 57 tables, enums, keys and indexes.
+
+`supabase/migrations/20261027000000_admin_dashboard.sql` upgrades a database created before the admin dashboard update (forum/project moderation status, report numbers, email broadcasts, platform settings, maintenance windows). `supabase/migrations/20261028000000_member_experience.sql` does the same for the member-app update (four roles with verification, blocks, collaboration requests, post views, comment attachments, forum mute, featured topics and gallery, topic descriptions).
+
+Every statement in the upgrade files is idempotent, so on a fresh database, where the rebuilt init file already has all of it, they are no-ops. `npm run db:migrate` applies whichever files a database has not seen yet.
 
 It also includes:
 - Trigram search indexes and `updated_at` triggers.
@@ -52,7 +57,7 @@ It is built from two sources by `scripts/build-migration.ts`:
 
 It is idempotent where it matters and runs on plain Postgres too (the Supabase-only parts are guarded). Apply it with `npm run db:migrate` or `supabase db push`.
 
-Before launch, keep editing the schema and rebuilding this one file. After launch, add new timestamped files next to it.
+Before launch, keep editing the schema and rebuilding the init file. Once a database is in use, also add a timestamped, idempotent upgrade file next to it (as `20261027000000_admin_dashboard.sql` does).
 
 ## 3. Supabase setup
 
@@ -128,7 +133,12 @@ The API logs a warning at startup while it is in test mode.
 | `taskAssigned` | Task assigned to you |
 | `expertEvaluation` | Expert reviewed your project |
 | `eventReminder` | Daily cron, a day before events you RSVP'd "going" to |
-| `broadcast` | Template ready. Broadcasts are in-app only for now (see Notes) |
+| `broadcast` | Admin → Notifications: alerts sent to all members or a segment (email by default) |
+| `maintenance` | Admin → Settings → Schedule maintenance (always sent, ignores the broadcast opt-out) |
+| `emailChangeCode` | Changing the sign-in email: code sent to the new address |
+| `verificationResult` | An admin approved or rejected a member's role verification |
+| `collaborationRequest` | Someone sent you a collaboration request (members can turn it off: `notificationPrefs.collaboration_request.email = false`) |
+| `emailChanged` | Email changed: notice sent to the old address |
 
 Users can switch off email per notification type (`PATCH /me/settings`, `notificationPrefs[type].email = false`). Security emails (codes, password changes, sign-in alerts, account status) are always sent.
 
@@ -138,7 +148,7 @@ Deployments go through GitHub Actions, never straight from Vercel. `vercel.json`
 
 **Pull request**
 - Typecheck, lint, build, migration drift check.
-- Postgres plus 359 end-to-end checks.
+- Postgres plus 802 end-to-end checks.
 - **CI passed** (the required check), then a preview deploy with its URL commented on the PR.
 
 **Merge to `main`**
@@ -190,9 +200,14 @@ With `COOKIE_SAMESITE=auto`, a frontend on `*.mycommuniti.org` gets a host-only 
 - If `refreshToken` comes back as `null`, keep the old one (a parallel refresh already rotated it).
 
 **Sign-up flow**
-1. `POST /auth/register`
+1. `POST /auth/register` (full name, email, location, password, confirm password, terms)
 2. `POST /auth/verify-email` (returns tokens)
-3. If `user.onboardingComplete` is false: `GET /topics`, then `PATCH /me/onboarding`
+3. `GET /me/onboarding` → `nextStep`:
+   - `select_role`: `PUT /me/role { memberRole, details }` (Researcher, Innovator, Professional or Learner form; reviewed by admins)
+   - `interests`: `GET /topics`, then `PUT /me/interests`
+   - `done`: the app
+
+The earlier one-call `PATCH /me/onboarding` still works.
 
 Content-creating routes return `403 ONBOARDING_REQUIRED` until onboarding is done.
 
@@ -224,6 +239,10 @@ Clients may broadcast `typing` on conversation channels.
 
 **Errors.** Every error is `{ error: { code, message, fields?, requestId } }`. Show `message`, branch on `code`, and map `fields` to form inputs.
 
+**Maintenance and app config.** Call `GET /app-config` (no auth) on start-up: it returns `imageOptimization` (prefetch images) and the running or next `maintenance` window, so you can show a banner ahead of time. While a window with `disableAccess` runs, member requests get `503 MAINTENANCE` with `Retry-After`; show a maintenance screen and retry later. Sign-in, the admin dashboard and staff tokens are not affected.
+
+**Change email.** `POST /me/email { newEmail, password }` sends a 6-digit code to the new address; `POST /me/email/verify { newEmail, code }` switches it.
+
 **Pagination.**
 - Lists: `?cursor=&limit=`, returning `{ data, nextCursor }`.
 - Admin tables: `?page=&pageSize=`, returning `{ data, page, pageSize, total }`.
@@ -242,11 +261,12 @@ apps/api
 │   │   ├── sql/custom.sql     Triggers, RLS, Realtime policy, buckets, seed
 │   │   └── client.ts          postgres-js + Drizzle (pooler-safe)
 │   ├── lib/                   errors, jwt, password (argon2id), crypto, mailer/, storage, realtime,
-│   │                          google, pagination, audit, logger, zod (patchOf)
+│   │                          google, pagination, audit, logger, zod (patchOf), stats (KPI ranges)
 │   ├── plugins/               auth (authenticate, requireMember, requireRole), error handler, swagger
 │   └── modules/<domain>/      *.routes.ts (HTTP + schemas) · *.service.ts (logic) · *.schemas.ts
+├── docs/ADMIN_API.md          Admin dashboard: screen → endpoint guide
 ├── scripts/                   migrate, build-migration, seed-admin, export-openapi, test-mail
-└── supabase/migrations/       THE single migration
+└── supabase/migrations/       init (full schema) + idempotent upgrade files
 ```
 
 **Conventions**
@@ -260,7 +280,7 @@ apps/api
 - Never use the global `db` inside `db.transaction(...)`; use `tx`. In production the pool is 1 connection, so it would deadlock.
 - LIKE searches go through `contains()` from `lib/like.ts`, so `%` and `_` in user input are escaped.
 
-Tests: see `tests/e2e/README.md` (359 end-to-end checks, run by CI on every push).
+Tests: see `tests/e2e/README.md` (802 end-to-end checks, run by CI on every push).
 
 ## 9. Security summary
 
@@ -286,6 +306,6 @@ Tests: see `tests/e2e/README.md` (359 end-to-end checks, run by CI on every push
 ## 10. Notes and next steps
 
 - **Rate limiting** is in-memory per serverless instance. For one shared limit across instances, add an Upstash Redis store to `@fastify/rate-limit`. Auth-critical limits (OTP, lockout) already live in Postgres.
-- **Email volume.** Emails are sent inline and awaited. That is right for transactional mail, but a broadcast to thousands of users by email needs a queue (for example Vercel Queues or Upstash QStash) and Resend's batch API. The `broadcast` template is ready for that.
+- **Email volume.** Transactional emails are sent inline and awaited. Admin broadcasts write one `broadcast_deliveries` row per recipient and send in parallel batches for up to about 20 s per request; anything left is sent by `POST /admin/broadcasts/{id}/resume` or the daily cron (two senders never pick the same row). For very large audiences, a per-minute cron (Vercel Pro) calling the same drain, or Resend's batch API, would shorten delivery time.
 - **Feed ranking** is chronological over a relevant set (people you follow, your forums, your interests, public posts). An engagement score can be added later.
 - **Local testing without Supabase:** Storage and Realtime calls are skipped or logged when `SUPABASE_URL` is not set, so everything except uploads works against plain Postgres.

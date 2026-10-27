@@ -20,3 +20,5 @@ Environment: `API_URL` (default `http://localhost:4000`), `API_LOG` (server log 
 | `test_cors.py` | allowed and blocked origins (including look-alike domains), refresh cookie attributes |
 | `test_modules.py` | onboarding, follows, feed, posts, comments, forums, search, projects, workspace, chat, notifications, explore, reports, admin |
 | `test_extended.py` | permissions, media attachments, edits/deletes, ownership, moderation, account deletion, regression checks |
+| `test_member.py` | member apps: sign-up with location, role onboarding and verification, post views, Not interested, comment attachments, blocking, search tabs, trending by topic, collaboration requests, online status, chat search and delete, project/forum tabs, forum mute and post filters, featured topics and gallery, highlights, Suggested for you |
+| `test_admin.py` | admin dashboard: KPI cards, moderation queue and Review Report actions, forum/project status, user details and account logs, change email, events, highlights, email broadcasts, settings, maintenance mode, logs |

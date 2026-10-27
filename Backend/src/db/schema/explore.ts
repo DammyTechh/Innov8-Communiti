@@ -3,7 +3,7 @@ import { createdAt, pk, timestamps, ts } from './_helpers.js';
 import { eventCategory, eventStatus, rsvpStatus } from './enums.js';
 import { media } from './content.js';
 import { projects } from './projects.js';
-import { users } from './users.js';
+import { topics, users } from './users.js';
 
 export const events = pgTable(
   'events',
@@ -26,6 +26,9 @@ export const events = pgTable(
     isOnline: boolean().notNull().default(false),
     meetingUrl: text(),
     registrationUrl: text(),
+    organizerName: text(),
+    organizerLogoUrl: text(),
+    organizerTagline: text(),
     capacity: integer(),
     status: eventStatus().notNull().default('draft'),
     goingCount: integer().notNull().default(0),
@@ -78,6 +81,8 @@ export const highlights = pgTable(
     createdById: uuid()
       .notNull()
       .references(() => users.id, { onDelete: 'restrict' }),
+    /** Set when the highlight is an album from a past event. */
+    eventId: uuid().references(() => events.id, { onDelete: 'set null' }),
     title: text().notNull(),
     caption: text().notNull().default(''),
     publishedAt: ts(),
@@ -99,4 +104,33 @@ export const highlightMedia = pgTable(
     position: integer().notNull().default(0),
   },
   (t) => [primaryKey({ columns: [t.highlightId, t.mediaId] })],
+);
+
+/** Topics a featured innovation belongs to ("Sort topics" filter). */
+export const featuredTopics = pgTable(
+  'featured_topics',
+  {
+    featuredId: uuid()
+      .notNull()
+      .references(() => featuredItems.id, { onDelete: 'cascade' }),
+    topicId: uuid()
+      .notNull()
+      .references(() => topics.id, { onDelete: 'cascade' }),
+  },
+  (t) => [primaryKey({ columns: [t.featuredId, t.topicId] }), index('featured_topics_topic_idx').on(t.topicId)],
+);
+
+/** Image gallery of a featured innovation (thumbnail strip on Featured View). */
+export const featuredMedia = pgTable(
+  'featured_media',
+  {
+    featuredId: uuid()
+      .notNull()
+      .references(() => featuredItems.id, { onDelete: 'cascade' }),
+    mediaId: uuid()
+      .notNull()
+      .references(() => media.id, { onDelete: 'cascade' }),
+    position: integer().notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.featuredId, t.mediaId] })],
 );

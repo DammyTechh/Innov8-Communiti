@@ -1,13 +1,15 @@
 import { pgEnum } from 'drizzle-orm/pg-core';
 
-export const memberRole = pgEnum('member_role', ['innovator', 'researcher', 'expert', 'investor', 'student']);
+/** Current roles: researcher, innovator, professional, learner. expert / investor / student are legacy values kept for existing accounts. */
+export const memberRole = pgEnum('member_role', ['innovator', 'researcher', 'expert', 'investor', 'student', 'professional', 'learner']);
+export const verificationStatus = pgEnum('verification_status', ['unverified', 'pending', 'verified', 'rejected']);
 export const platformRole = pgEnum('platform_role', ['member', 'moderator', 'admin', 'super_admin']);
 export const userStatus = pgEnum('user_status', ['active', 'flagged', 'restricted', 'suspended', 'blocked']);
 export const themePref = pgEnum('theme_pref', ['light', 'dark', 'system']);
 export const profileVisibility = pgEnum('profile_visibility', ['public', 'members', 'private']);
 export const messagePermission = pgEnum('message_permission', ['everyone', 'following', 'none']);
 export const clientKind = pgEnum('client_kind', ['web', 'admin', 'ios', 'android', 'unknown']);
-export const otpPurpose = pgEnum('otp_purpose', ['verify_email', 'password_reset']);
+export const otpPurpose = pgEnum('otp_purpose', ['verify_email', 'password_reset', 'email_change']);
 
 export const mediaKind = pgEnum('media_kind', ['image', 'video', 'document', 'audio']);
 export const mediaVisibility = pgEnum('media_visibility', ['public', 'private']);
@@ -16,6 +18,8 @@ export const mediaStatus = pgEnum('media_status', ['pending', 'ready', 'failed']
 export const postAudience = pgEnum('post_audience', ['everyone', 'followers', 'forum', 'project']);
 export const visibility = pgEnum('visibility', ['public', 'private']);
 export const forumRole = pgEnum('forum_role', ['owner', 'moderator', 'member']);
+/** Moderation state of a forum or project, set from the admin dashboard. `flagged` = warned. */
+export const communityStatus = pgEnum('community_status', ['active', 'flagged', 'restricted', 'suspended']);
 
 export const projectStatus = pgEnum('project_status', ['open', 'ongoing', 'completed', 'archived']);
 export const projectRole = pgEnum('project_role', ['owner', 'admin', 'contributor', 'viewer']);
@@ -42,10 +46,21 @@ export const ledgerType = pgEnum('ledger_type', [
 export const conversationKind = pgEnum('conversation_kind', ['direct', 'project']);
 export const messageKind = pgEnum('message_kind', ['text', 'image', 'file', 'voice', 'system']);
 
-export const eventCategory = pgEnum('event_category', ['hackathon', 'workshop', 'meetup', 'conference', 'webinar', 'other']);
+export const eventCategory = pgEnum('event_category', [
+  'hackathon',
+  'workshop',
+  'meetup',
+  'conference',
+  'webinar',
+  'other',
+  'bootcamp',
+  'networking_fair',
+]);
 export const eventStatus = pgEnum('event_status', ['draft', 'published', 'cancelled']);
 export const rsvpStatus = pgEnum('rsvp_status', ['going', 'interested']);
 export const pushPlatform = pgEnum('push_platform', ['ios', 'android', 'web']);
+export const broadcastStatus = pgEnum('broadcast_status', ['sending', 'sent', 'failed']);
+export const deliveryStatus = pgEnum('delivery_status', ['pending', 'sent', 'failed']);
 
 export const reportTarget = pgEnum('report_target', ['post', 'comment', 'forum', 'project', 'user', 'message']);
 export const reportReason = pgEnum('report_reason', [
@@ -58,6 +73,7 @@ export const reportReason = pgEnum('report_reason', [
   'nudity',
   'violence',
   'other',
+  'intellectual_property',
 ]);
 export const reportStatus = pgEnum('report_status', ['pending', 'reviewed', 'dismissed']);
 export const moderationActionType = pgEnum('moderation_action', [

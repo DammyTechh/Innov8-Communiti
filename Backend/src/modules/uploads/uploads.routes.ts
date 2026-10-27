@@ -17,7 +17,7 @@ const MB = 1024 * 1024;
 const PURPOSES = {
   avatar: { kinds: ['image'], visibility: 'public', maxBytes: 5 * MB },
   cover: { kinds: ['image'], visibility: 'public', maxBytes: 10 * MB },
-  post: { kinds: ['image', 'video'], visibility: 'public', maxBytes: 200 * MB },
+  post: { kinds: ['image', 'video', 'document'], visibility: 'public', maxBytes: 200 * MB },
   message: { kinds: ['image', 'video', 'document', 'audio'], visibility: 'private', maxBytes: 50 * MB },
   research: { kinds: ['document', 'image'], visibility: 'private', maxBytes: 25 * MB },
   prototype: { kinds: ['image', 'video', 'document'], visibility: 'private', maxBytes: 200 * MB },
@@ -26,6 +26,9 @@ const PURPOSES = {
   forum: { kinds: ['image'], visibility: 'public', maxBytes: 10 * MB },
   event: { kinds: ['image'], visibility: 'public', maxBytes: 10 * MB },
   highlight: { kinds: ['image', 'video'], visibility: 'public', maxBytes: 200 * MB },
+  comment: { kinds: ['image', 'document'], visibility: 'public', maxBytes: 25 * MB },
+  verification: { kinds: ['document', 'image'], visibility: 'private', maxBytes: 10 * MB },
+  featured: { kinds: ['image'], visibility: 'public', maxBytes: 10 * MB },
 } as const;
 
 const MIME: Record<string, 'image' | 'video' | 'document' | 'audio'> = {
@@ -67,7 +70,9 @@ export const uploadRoutes: FastifyPluginAsyncZod = async (app) => {
         'Upload the file with `PUT uploadUrl` (body = file bytes, header `Content-Type`). Then call `POST /uploads/{mediaId}/complete`. Use the returned `mediaId` in posts, messages and workspace items; for avatar/cover use `publicUrl`.',
       security: auth,
       body: z.object({
-        purpose: z.enum(Object.keys(PURPOSES) as [keyof typeof PURPOSES, ...(keyof typeof PURPOSES)[]]),
+        purpose: z.enum(Object.keys(PURPOSES) as [keyof typeof PURPOSES, ...(keyof typeof PURPOSES)[]]).describe(
+          'Where the file will be used. comment: images/files on comments · verification: onboarding evidence (private, PDF/PNG/JPEG, 10 MB) · featured: featured-innovation gallery · post now also accepts documents (paperclip)',
+        ),
         mimeType: z.string().max(120),
         sizeBytes: z.number().int().positive(),
         fileName: z.string().max(200).optional(),

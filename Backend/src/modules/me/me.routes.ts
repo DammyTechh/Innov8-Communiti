@@ -1,17 +1,22 @@
-import { and, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt, ne, sql } from 'drizzle-orm';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { db } from '../../db/client.js';
-import { topics, userInterests, userSettings, users } from '../../db/schema/index.js';
+import { topics, userBlocks, userInterests, userSettings, users } from '../../db/schema/index.js';
+import { email as emailSchema, otpCode } from '../auth/auth.schemas.js';
+import { consumeOtp, issueOtp, OTP_TTL_SECONDS } from '../auth/otp.service.js';
 import { audit } from '../../lib/audit.js';
 import { Errors } from '../../lib/errors.js';
-import { sendMailSafe, templates } from '../../lib/mailer/index.js';
+import { sendMail, sendMailSafe, templates } from '../../lib/mailer/index.js';
 import { verifyPassword } from '../../lib/password.js';
 import { currentUser } from '../../plugins/auth.js';
 import { toAuthUser } from '../auth/auth.service.js';
 import { authUserDto } from '../auth/auth.schemas.js';
 import { clearRefreshCookie, revokeAllSessions } from '../auth/session.service.js';
-import { auth, memberRoleEnum, noContent, topicDto } from '../_shared/dto.js';
+import { auth, memberRoleEnum, noContent, topicDto, userSummary } from '../_shared/dto.js';
+import { cursorPageSchema, cursorQuery } from '../../lib/pagination.js';
+import { userSummaryCols } from '../_shared/users.js';
+import { completeOnboardingIfReady, loadVerification, onboardingDto, onboardingStatus, roleBody, submitRole, verificationDto } from './verification.js';
 
 const tags = ['Me'];
 const username = z
@@ -32,12 +37,18 @@ const meDto = authUserDto
     coverUrl: z.string().nullable(),
     dateOfBirth: z.string().nullable(),
     country: z.string().nullable(),
+    location: z.string().nullable(),
+    phone: z.string().nullable(),
+    institutionalEmail: z.string().nullable(),
+    researchLink: z.string().nullable(),
+    researchEvidence: z.string().nullable(),
     openToCollaborate: z.boolean(),
     followerCount: z.number(),
     followingCount: z.number(),
     postCount: z.number(),
     collaborationCount: z.number(),
     interests: z.array(topicDto),
+    verification: verificationDto.nullable().describe('My role form and its review status (Settings → Account Preferences)'),
     deletionScheduledFor: z.string().nullable(),
   })
   .meta({ id: 'Me' });
@@ -62,7 +73,7 @@ async function loadMe(userId: string) {
     .innerJoin(topics, eq(topics.id, userInterests.topicId))
     .where(eq(userInterests.userId, userId))
     .orderBy(topics.sortOrder);
-  return { ...toAuthUser(u), ...u, interests };
+  return { ...toAuthUser(u), ...u, interests, verification: await loadVerification(userId) };
 }
 
 async function assertUsernameFree(name: string, userId: string) {
@@ -94,13 +105,14 @@ export const meRoutes: FastifyPluginAsyncZod = async (app) => {
   app.patch('/onboarding', {
     schema: {
       tags,
-      summary: 'Finish onboarding: role, date of birth, country, interests',
-      description: 'Figma: "Setup your account" + "One more thing!". Sets `onboardingComplete: true` and sends the welcome email.',
+      summary: 'Finish onboarding in one call (legacy)',
+      description:
+        'Earlier single-step flow, kept for existing clients. The current flow is PUT /me/role (Select Role + role form) then PUT /me/interests; use GET /me/onboarding to know the next step. `dateOfBirth` and `country` are now optional.',
       security: auth,
       body: z.object({
         memberRole: memberRoleEnum,
-        dateOfBirth: dob,
-        country,
+        dateOfBirth: dob.optional(),
+        country: country.optional(),
         topicIds: z.array(z.uuid()).min(1, 'Pick at least one topic').max(20),
         username: username.optional(),
       }),
@@ -116,8 +128,8 @@ export const meRoutes: FastifyPluginAsyncZod = async (app) => {
         .update(users)
         .set({
           memberRole: b.memberRole,
-          dateOfBirth: b.dateOfBirth,
-          country: b.country,
+          ...(b.dateOfBirth ? { dateOfBirth: b.dateOfBirth } : {}),
+          ...(b.country ? { country: b.country } : {}),
           ...(b.username ? { username: b.username } : {}),
           onboardingCompletedAt: before?.onboarded ?? new Date().toISOString(),
         })
@@ -131,7 +143,10 @@ export const meRoutes: FastifyPluginAsyncZod = async (app) => {
     schema: {
       tags,
       summary: 'Edit profile',
-      description: 'Avatar and cover: upload with POST /uploads/presign (purpose avatar|cover), then pass the returned public URL.',
+      description: [
+        'Edit Profile: profile name (`fullName`), profession (`headline`), avatar (upload with POST /uploads/presign, purpose `avatar`, then pass `avatarUrl`). Settings: `location`, `phone`.',
+        'Changing role here clears verification (`verificationStatus: unverified`); to change role with its form ("Change my role"), use PUT /me/role. Institutional email and research details are changed through PUT /me/role too, which sends them for review again.',
+      ].join(' '),
       security: auth,
       body: z
         .object({
@@ -145,6 +160,13 @@ export const meRoutes: FastifyPluginAsyncZod = async (app) => {
           country,
           dateOfBirth: dob,
           openToCollaborate: z.boolean(),
+          location: z.string().trim().max(120).nullable().describe('e.g. "Lugbe, Abuja, Nigeria"'),
+          phone: z
+            .string()
+            .trim()
+            .regex(/^\+?[0-9 ()-]{7,20}$/, 'Enter a valid phone number')
+            .nullable()
+            .describe('Optional, e.g. +234 803 000 0000'),
         })
         .partial(),
       response: { 200: meDto },
@@ -152,7 +174,113 @@ export const meRoutes: FastifyPluginAsyncZod = async (app) => {
     handler: async (req) => {
       const me = currentUser(req);
       if (req.body.username) await assertUsernameFree(req.body.username, me.id);
-      if (Object.keys(req.body).length) await db.update(users).set(req.body).where(eq(users.id, me.id));
+      const [current] = await db.select({ memberRole: users.memberRole }).from(users).where(eq(users.id, me.id));
+      const roleChanged = req.body.memberRole !== undefined && req.body.memberRole !== current?.memberRole;
+      if (Object.keys(req.body).length) await db.update(users).set({ ...req.body, ...(roleChanged ? { verificationStatus: 'unverified' as const } : {}) }).where(eq(users.id, me.id));
+      return loadMe(me.id);
+    },
+  });
+
+  app.get('/onboarding', {
+    schema: {
+      tags,
+      summary: 'Onboarding progress (where to send the member after sign-in)',
+      description: '`nextStep`: `select_role` → Select Role + role form (PUT /me/role), `interests` → "One more thing!" (PUT /me/interests), `done` → the app.',
+      security: auth,
+      response: { 200: onboardingDto },
+    },
+    handler: async (req) => onboardingStatus(currentUser(req).id),
+  });
+
+  app.put('/role', {
+    config: { rateLimit: { max: 20, timeWindow: '1 hour' } },
+    schema: {
+      tags,
+      summary: 'Submit my role and its verification form (Select Role → Researcher / Innovator / Professional / Learner)',
+      description: [
+        'Onboarding step 1, and Settings → "Change my role" / "Change this email". Body: `{ memberRole, details }`; `details` depends on the role:',
+        '**researcher**: `institutionalEmail` or `orcidId` (at least one), `researchProjectLink`, `researchEvidence`.',
+        '**innovator**: `ventureName`, `description`, `developmentStage` (open | ongoing | closed), `evidenceLink`, `evidenceFileIds`, `otherCueFileIds` (upload with purpose `verification`).',
+        '**professional**: `organizationName`, `professionalTitle`, `profileLink`, `workEmail`.',
+        '**learner**: `institution`, `courseOfStudy`, `studentEmail`, `level`.',
+        'Every submission sets `verificationStatus: pending` until an admin reviews it (the account stays usable). Completes onboarding when interests are already chosen.',
+      ].join(' '),
+      security: auth,
+      body: roleBody,
+      response: { 200: meDto },
+    },
+    handler: async (req) => {
+      const me = currentUser(req);
+      await submitRole(req, me.id, req.body);
+      return loadMe(me.id);
+    },
+  });
+
+  app.get('/blocked-users', {
+    schema: { tags, summary: 'People I blocked', security: auth, querystring: cursorQuery, response: { 200: cursorPageSchema(userSummary.extend({ blockedAt: z.string() })) } },
+    handler: async (req) => {
+      const me = currentUser(req);
+      const { cursor, limit } = req.query;
+      const rows = await db
+        .select({ ...userSummaryCols, blockedAt: userBlocks.createdAt })
+        .from(userBlocks)
+        .innerJoin(users, eq(users.id, userBlocks.blockedId))
+        .where(and(eq(userBlocks.blockerId, me.id), cursor ? lt(userBlocks.blockedId, cursor) : undefined))
+        .orderBy(desc(userBlocks.blockedId))
+        .limit(limit + 1);
+      const data = rows.slice(0, limit);
+      return { data, nextCursor: rows.length > limit ? data[data.length - 1]!.id : null };
+    },
+  });
+
+  app.post('/email', {
+    config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+    schema: {
+      tags,
+      summary: 'Change my email: step 1, send a code to the new address',
+      description: 'Profile → Email Address. Accounts with a password must confirm it. Then call POST /me/email/verify with the code.',
+      security: auth,
+      body: z.object({ newEmail: emailSchema, password: z.string().max(128).optional() }),
+      response: { 202: z.object({ email: z.string(), codeExpiresIn: z.number(), resendAvailableIn: z.number() }) },
+    },
+    handler: async (req, reply) => {
+      const me = currentUser(req);
+      const [u] = await db.select().from(users).where(eq(users.id, me.id));
+      if (!u) throw Errors.notFound('User');
+      if (u.email === req.body.newEmail) throw Errors.validation('This is already your email', { newEmail: 'Same as current email' });
+      if (u.passwordHash && !(req.body.password && (await verifyPassword(u.passwordHash, req.body.password)))) {
+        throw Errors.validation('Your password is incorrect', { password: 'Incorrect password' });
+      }
+      const [taken] = await db.select({ id: users.id }).from(users).where(eq(users.email, req.body.newEmail)).limit(1);
+      if (taken) throw Errors.conflict('An account with this email already exists', 'EMAIL_TAKEN');
+      const otp = await issueOtp(req.body.newEmail, 'email_change', me.id);
+      await sendMail(req.body.newEmail, templates.emailChangeCode({ name: u.fullName.split(' ')[0]!, code: otp.code, minutes: OTP_TTL_SECONDS / 60 }));
+      return reply.status(202).send({ email: req.body.newEmail, codeExpiresIn: otp.expiresIn, resendAvailableIn: otp.resendAvailableIn });
+    },
+  });
+
+  app.post('/email/verify', {
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+    schema: {
+      tags,
+      summary: 'Change my email: step 2, confirm the code',
+      description: 'Switches the sign-in email, emails the old address, and records "changed email" in the account logs.',
+      security: auth,
+      body: z.object({ newEmail: emailSchema, code: otpCode }),
+      response: { 200: meDto },
+    },
+    handler: async (req) => {
+      const me = currentUser(req);
+      const otp = await consumeOtp(req.body.newEmail, 'email_change', req.body.code);
+      // A code is bound to the account that requested it.
+      if (otp.userId !== me.id) throw Errors.badRequest('This code has expired. Request a new one.', 'OTP_EXPIRED');
+      const [u] = await db.select().from(users).where(eq(users.id, me.id));
+      if (!u) throw Errors.notFound('User');
+      const [taken] = await db.select({ id: users.id }).from(users).where(eq(users.email, req.body.newEmail)).limit(1);
+      if (taken) throw Errors.conflict('An account with this email already exists', 'EMAIL_TAKEN');
+      await db.update(users).set({ email: req.body.newEmail, emailVerifiedAt: new Date().toISOString() }).where(eq(users.id, me.id));
+      await audit({ actorId: me.id, action: 'user.email_changed', entityType: 'user', entityId: me.id, before: { email: u.email }, after: { email: req.body.newEmail } }, req);
+      await sendMailSafe(u.email, templates.emailChanged({ name: u.fullName.split(' ')[0]!, newEmail: req.body.newEmail, when: new Date().toUTCString() }));
       return loadMe(me.id);
     },
   });
@@ -178,14 +306,17 @@ export const meRoutes: FastifyPluginAsyncZod = async (app) => {
   app.put('/interests', {
     schema: {
       tags,
-      summary: 'Replace my interest topics',
+      summary: 'Replace my interest topics (onboarding step 2: "One more thing!")',
+      description: 'Finishes onboarding (and sends the welcome email) when a role has already been submitted. Also used from Settings to change interests.',
       security: auth,
       body: z.object({ topicIds: z.array(z.uuid()).min(1).max(20) }),
       response: { 200: z.object({ data: z.array(topicDto) }) },
     },
     handler: async (req) => {
-      await setInterests(currentUser(req).id, req.body.topicIds);
-      return { data: (await loadMe(currentUser(req).id)).interests };
+      const me = currentUser(req);
+      await setInterests(me.id, req.body.topicIds);
+      await completeOnboardingIfReady(me.id);
+      return { data: (await loadMe(me.id)).interests };
     },
   });
 
@@ -244,10 +375,15 @@ export const meRoutes: FastifyPluginAsyncZod = async (app) => {
 
 export const topicRoutes: FastifyPluginAsyncZod = async (app) => {
   app.get('/topics', {
-    schema: { tags: ['Topics'], summary: 'All interest topics', response: { 200: z.object({ data: z.array(topicDto) }) } },
+    schema: {
+      tags: ['Topics'],
+      summary: 'All interest topics',
+      description: 'Feed customization ("One more thing!"), forum Focus Topics, "Search in Topics" and "Sort topics". `description` is the line under each topic name.',
+      response: { 200: z.object({ data: z.array(topicDto.extend({ description: z.string() })) }) },
+    },
     handler: async (_req, reply) => {
       reply.header('cache-control', 'public, max-age=300');
-      return { data: await db.select({ id: topics.id, slug: topics.slug, name: topics.name }).from(topics).orderBy(topics.sortOrder) };
+      return { data: await db.select({ id: topics.id, slug: topics.slug, name: topics.name, description: topics.description }).from(topics).orderBy(topics.sortOrder) };
     },
   });
 };

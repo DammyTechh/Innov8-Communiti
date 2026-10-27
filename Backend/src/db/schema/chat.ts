@@ -39,6 +39,8 @@ export const conversationMembers = pgTable(
     unreadCount: integer().notNull().default(0),
     mutedUntil: ts(),
     clearedAt: ts(),
+    /** "Delete chat": hidden from my list until a newer message arrives. */
+    hiddenAt: ts(),
     joinedAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.conversationId, t.userId] }), index('conversation_members_user_idx').on(t.userId)],

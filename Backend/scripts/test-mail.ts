@@ -25,6 +25,12 @@ const samples = [
   templates.expertEvaluation({ name: 'Ada', expert: 'Dr. Chioma Eze', project: 'Solar Irrigation Kit', projectId: id }),
   templates.eventReminder({ name: 'Ada', event: 'Lagos Innovation Meetup', when: 'Friday 2 October 2026, 17:00', where: 'Yaba, Lagos', eventId: id }),
   templates.broadcast({ name: 'Ada', title: 'Applications for Cohort 3 are open', body: 'Submit your project by 30 October.' }),
+  templates.maintenance({ name: 'Ada', message: 'We are upgrading our database.', from: 'Saturday 31 October 2026, 22:00 (WAT)', to: 'Sunday 1 November 2026, 02:00 (WAT)', disableAccess: true }),
+  templates.emailChangeCode({ name: 'Ada', code: '310577', minutes: 10 }),
+  templates.verificationResult({ name: 'Ada', role: 'Researcher', approved: true }),
+  templates.verificationResult({ name: 'Ada', role: 'Learner', approved: false, note: 'Please use your school email address.' }),
+  templates.collaborationRequest({ name: 'Ada', sender: 'Anita Somoga', message: 'I would like to collab with you on a project.', project: 'Mechanical robot project' }),
+  templates.emailChanged({ name: 'Ada', newEmail: 'ada.new@example.com', when: new Date().toUTCString() }),
 ];
 for (const t of samples) {
   await sendMail(to, t);

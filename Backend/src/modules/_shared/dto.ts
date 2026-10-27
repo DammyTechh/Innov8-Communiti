@@ -6,7 +6,15 @@ export const idParam = z.object({ id: z.uuid() });
 export const noContent = { 204: z.null().describe('No content') };
 export const auth = [{ bearerAuth: [] }];
 
-export const memberRoleEnum = z.enum(['innovator', 'researcher', 'expert', 'investor', 'student']);
+/** Every stored role. The four current ones are researcher, innovator, professional and learner; expert, investor and student are legacy. */
+export const memberRoleEnum = z
+  .enum(['researcher', 'innovator', 'professional', 'learner', 'expert', 'investor', 'student'])
+  .describe('Current roles: researcher, innovator, professional, learner. Legacy (existing accounts only): expert, investor, student');
+/** Roles a member can pick today (Select Role screen). */
+export const selectableRoleEnum = z.enum(['researcher', 'innovator', 'professional', 'learner']);
+export const verificationStatusEnum = z
+  .enum(['unverified', 'pending', 'verified', 'rejected'])
+  .describe('Role verification: unverified (no form yet), pending (waiting for an admin), verified, rejected');
 
 export const userSummary = z
   .object({
@@ -16,6 +24,7 @@ export const userSummary = z
     avatarUrl: z.string().nullable(),
     headline: z.string().nullable(),
     memberRole: memberRoleEnum.nullable(),
+    verified: z.boolean().describe('Role verified by an admin (show the verified badge)'),
   })
   .meta({ id: 'UserSummary' });
 export type UserSummary = z.infer<typeof userSummary>;
