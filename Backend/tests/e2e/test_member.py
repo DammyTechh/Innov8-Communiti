@@ -10,6 +10,8 @@ AGRI, AI = TOP['agriculture']['id'], TOP['ai-ml']['id']
 
 # ── Create account → verify → onboarding ────────────────────────────────────
 call('POST', '/auth/register', body={'fullName': 'Rita Researcher', 'email': 'rita.r@example.com', 'location': 'Lugbe, Abuja', 'password': 'Secret123', 'confirmPassword': 'Secret999', 'acceptTerms': True}, expect=400)
+for junk in ['asdf ghjk', 'Test User', 'John123']:
+    call('POST', '/auth/register', body={'fullName': junk, 'email': 'junk.name@example.com', 'password': 'Secret123', 'acceptTerms': True}, expect=400)
 call('POST', '/auth/register', body={'fullName': 'Rita Researcher', 'email': 'rita.r@example.com', 'location': 'Lugbe, Abuja', 'password': 'Secret123', 'confirmPassword': 'Secret123', 'acceptTerms': True}, expect=201)
 v = call('POST', '/auth/verify-email', body={'email': 'rita.r@example.com', 'code': code_from_log()})
 rita, rita_id = v['accessToken'], v['user']['id']
@@ -21,8 +23,21 @@ check(call('GET', '/me', rita)['location'] == 'Lugbe, Abuja', 'location saved at
 call('PUT', '/me/role', rita, {'memberRole': 'researcher', 'details': {'researchEvidence': 'no identity'}}, expect=400)
 call('PUT', '/me/role', rita, {'memberRole': 'researcher', 'details': {'orcidId': '1234'}}, expect=400)
 call('PUT', '/me/role', rita, {'memberRole': 'expert', 'details': {}}, expect=400)  # legacy roles cannot be picked
-me = call('PUT', '/me/role', rita, {'memberRole': 'researcher', 'details': {'institutionalEmail': 'Rita@Uni.edu.NG', 'orcidId': '0000-0006-0000-000x', 'researchProjectLink': 'https://research.example.org/rita', 'researchEvidence': 'Soil health in Kano'}})
-check(me['memberRole'] == 'researcher' and me['verification']['status'] == 'pending' and me['verification']['details']['orcidId'] == '0000-0006-0000-000X', 'researcher form saved, pending review')
+# Automatic verification: anything that is not real is refused at once (422), field by field, and nothing is saved
+d = call('PUT', '/me/role', rita, {'memberRole': 'researcher', 'details': {'orcidId': '0000-0002-5555-1236'}}, expect=422)
+check(d['error']['code'] == 'VERIFICATION_FAILED' and 'details.orcidId' in d['error']['fields'], 'auto-verify: ORCID checksum refused')
+d = call('PUT', '/me/role', rita, {'memberRole': 'researcher', 'details': {'institutionalEmail': 'rita@gmail.com', 'researchEvidence': 'asdfgh qwerty'}}, expect=422)
+check(set(d['error']['fields']) == {'details.institutionalEmail', 'details.researchEvidence'}, 'auto-verify: Gmail as institutional email and gibberish evidence refused')
+d = call('PUT', '/me/role', rita, {'memberRole': 'researcher', 'details': {'institutionalEmail': 'rita@mailinator.com'}}, expect=422)
+check('disposable' in d['error']['fields']['details.institutionalEmail'].lower(), 'auto-verify: disposable email refused')
+d = call('PUT', '/me/role', rita, {'memberRole': 'researcher', 'details': {'orcidId': '0000-0002-5555-1235', 'researchProjectLink': 'http://127.0.0.1/admin'}}, expect=422)
+check('details.researchProjectLink' in d['error']['fields'], 'auto-verify: private link refused')
+d = call('PUT', '/me/role', rita, {'memberRole': 'researcher', 'details': {'orcidId': '0000-0002-5555-1235', 'researchProjectLink': 'javascript:alert(1)'}}, expect=400)
+check('details.researchProjectLink' in d['error']['fields'], 'javascript: links rejected by the schema')
+check(call('GET', '/me/onboarding', rita)['nextStep'] == 'select_role' and call('GET', '/me', rita)['verification'] is None, 'refused form is not saved')
+me = call('PUT', '/me/role', rita, {'memberRole': 'researcher', 'details': {'institutionalEmail': 'Rita@Uni.edu.NG', 'orcidId': '0000-0002-5555-1235', 'researchProjectLink': 'https://research.uni.edu.ng/rita', 'researchEvidence': 'Soil health in Kano'}})
+check(me['memberRole'] == 'researcher' and me['verification']['status'] == 'verified' and me['verification']['decidedBy'] == 'auto' and me['verificationStatus'] == 'verified', 'researcher verified automatically, no admin queue')
+check(me['verification']['details']['orcidId'] == '0000-0002-5555-1235', 'ORCID saved')
 check(me['verification']['details']['institutionalEmail'] == 'rita@uni.edu.ng' and me['institutionalEmail'] == 'rita@uni.edu.ng', 'institutional email normalised and mirrored')
 check(call('GET', '/me/onboarding', rita)['nextStep'] == 'interests', 'onboarding: topics next')
 call('POST', '/posts', rita, {'body': 'too early'}, expect=403)
@@ -42,39 +57,56 @@ ev = media(ivan_id, 'document', 'application/pdf', 'private')
 cue = media(ivan_id, 'image', 'image/png', 'private')
 call('PUT', '/me/role', ivan, {'memberRole': 'innovator', 'details': {'ventureName': 'Green Hill', 'developmentStage': 'paused'}}, expect=400)
 call('PUT', '/me/role', ivan, {'memberRole': 'innovator', 'details': {'ventureName': 'Green Hill', 'developmentStage': 'open', 'evidenceFileIds': [media(rita_id, 'document', 'application/pdf', 'private')]}}, expect=400)  # not your file
-iv = call('PUT', '/me/role', ivan, {'memberRole': 'innovator', 'details': {'ventureName': 'Green Hill Solutions', 'description': 'Solar dryers', 'developmentStage': 'ongoing', 'evidenceLink': 'https://example.com/deck', 'evidenceFileIds': [ev], 'otherCueFileIds': [cue]}})
+iv = call('PUT', '/me/role', ivan, {'memberRole': 'innovator', 'details': {'ventureName': 'Green Hill Solutions', 'description': 'Solar dryers', 'developmentStage': 'ongoing', 'evidenceLink': 'https://greenhill.ng/deck', 'evidenceFileIds': [ev], 'otherCueFileIds': [cue]}})
 check(len(iv['verification']['files']) == 2 and iv['verification']['details']['developmentStage'] == 'ongoing', 'innovator evidence files attached')
+check(iv['verificationStatus'] == 'verified', 'innovator verified automatically')
 call('PUT', '/me/interests', ivan, {'topicIds': [AGRI]})
 
 pat, pat_id = member('Pat Professional', 'pat.p@example.com', 'professional', {'organizationName': 'Green Hill Solutions', 'professionalTitle': 'Machinist', 'profileLink': 'https://linkedin.com/in/pat', 'workEmail': 'pat@greenhill.ng'})
 check(call('GET', '/me', pat)['headline'] == 'Machinist', 'professional title becomes headline')
 lea, lea_id = member('Lara Learner', 'lara.l@example.com', 'learner', {'studentEmail': 'lara@abu.edu.ng', 'institution': 'Ahmadu Bello University', 'courseOfStudy': 'Business administration', 'level': '200'})
 
-# ── Admin verification queue ────────────────────────────────────────────────
-q = call('GET', '/admin/verifications?status=pending', adm)
-check({rita_id, ivan_id, pat_id, lea_id} <= {r['user']['id'] for r in q['data']}, 'pending verifications listed')
-check(len(call('GET', f'/admin/verifications/{ivan_id}', adm)['files']) == 2, 'admin sees evidence files')
-ap = call('POST', f'/admin/verifications/{rita_id}/approve', adm, {})
-check(ap['status'] == 'verified', 'researcher approved')
-call('POST', f'/admin/verifications/{rita_id}/approve', adm, {}, expect=409)
+# ── Admin: automatic decisions, notifications and overrides ────────────────
+q = call('GET', '/admin/verifications', adm)
+rows = {r['user']['id']: r for r in q['data']}
+check({rita_id, ivan_id, pat_id, lea_id} <= set(rows), 'verifications listed (default: all)')
+check(all(rows[u]['status'] == 'verified' and rows[u]['decidedBy'] == 'auto' and isinstance(rows[u]['trustScore'], int) for u in (rita_id, ivan_id, pat_id, lea_id)), 'auto decisions carry decidedBy and trustScore')
+check(not call('GET', '/admin/verifications?status=pending', adm)['data'], 'nothing waits for review')
+check(call('GET', '/admin/verifications?decidedBy=auto&memberRole=learner', adm)['total'] >= 1, 'filter by decidedBy and role')
+dv = call('GET', f'/admin/verifications/{ivan_id}', adm)
+check(len(dv['files']) == 2 and dv['autoChecks']['decision'] == 'verified' and any(c['check'] == 'evidence_files' for c in dv['autoChecks']['checks']), 'admin sees evidence files and every automatic check')
+an = [n for n in call('GET', '/notifications?limit=50', adm)['data'] if n['type'] == 'new_member']
+check({rita_id, ivan_id, pat_id, lea_id} <= {n['targetId'] for n in an}, 'admins notified of each new member')
+check(any(n['targetId'] == rita_id and 'Researcher' in n['body'] and 'verified automatically' in n['body'] for n in an), 'admin notification shows role and result')
+call('POST', f'/admin/verifications/{rita_id}/approve', adm, {}, expect=409)  # already verified
 call('POST', f'/admin/verifications/{lea_id}/reject', adm, {}, expect=400)  # reason required
-call('POST', f'/admin/verifications/{lea_id}/reject', adm, {'note': 'Use your school email'})
+rv = call('POST', f'/admin/verifications/{lea_id}/reject', adm, {'note': 'Use your school email'})
+check(rv['status'] == 'rejected' and rv['decidedBy'] == 'admin', 'admin revokes an automatic verification')
 check(call('GET', '/me', lea)['verification']['reviewNote'] == 'Use your school email', 'member sees rejection reason')
 check(any(n['type'] == 'verification' for n in call('GET', '/notifications', lea)['data']), 'member notified of the decision')
+check(call('POST', f'/admin/verifications/{lea_id}/recheck', adm)['status'] == 'verified', 'admin re-check runs automatic verification again')
+call('POST', f'/admin/verifications/{lea_id}/reject', adm, {'note': 'Use your school email'})
+call('PUT', '/me/role', lea, {'memberRole': 'learner', 'details': {'studentEmail': 'lara@gmail.com', 'institution': 'Ahmadu Bello University', 'courseOfStudy': 'Business administration'}}, expect=422)
+check(call('GET', '/me', lea)['verification']['status'] == 'rejected', 'a refused resubmission leaves the previous form untouched')
 call('PUT', '/me/role', lea, {'memberRole': 'learner', 'details': {'studentEmail': 'lara@student.abu.edu.ng', 'institution': 'Ahmadu Bello University', 'courseOfStudy': 'Business administration'}})
-check(call('GET', '/me', lea)['verificationStatus'] == 'pending', 'resubmission goes back to pending')
+check(call('GET', '/me', lea)['verificationStatus'] == 'verified', 'resubmission is verified automatically')
 check(call('GET', f'/admin/users/{ivan_id}', adm)['verification']['memberRole'] == 'innovator', 'admin user panel shows the role form')
 check(call('GET', '/me', rita)['verificationStatus'] == 'verified', 'verified status on /me')
+
+# One identity per account: the same ORCID iD cannot back a second member
+dup, dup_id = signup('Rita Okoro', 'rita.okoro@example.com')
+d = call('PUT', '/me/role', dup, {'memberRole': 'researcher', 'details': {'orcidId': '0000-0002-5555-1235'}}, expect=422)
+check('another' in d['error']['fields']['details.orcidId'], 'duplicate ORCID refused')
+
+# Changing role from Edit Profile clears verification
+check(call('PATCH', '/me', pat, {'memberRole': 'innovator'})['verificationStatus'] == 'unverified', 'role change clears verification')
+call('PATCH', '/me', pat, {'memberRole': 'professional'})
 
 # Evaluations: verified researcher yes, unverified professional no
 pj = call('POST', '/projects', rita, {'title': 'Soil sensors', 'pitch': 'Cheap soil sensors', 'topicIds': [AGRI]}, expect=201)
 call('POST', f"/projects/{pj['id']}/evaluations", rita, {'feasibility': 4, 'sustainability': 5, 'novelty': 4, 'feedback': 'Promising field results so far.'}, expect=201)
 pj2 = call('POST', '/projects', pat, {'title': 'Lathe kit'}, expect=201)
 call('POST', f"/projects/{pj2['id']}/evaluations", pat, {'feasibility': 3, 'sustainability': 3, 'novelty': 3, 'feedback': 'Looks reasonable to me overall.'}, expect=403)
-
-# Changing role from Edit Profile clears verification
-check(call('PATCH', '/me', pat, {'memberRole': 'innovator'})['verificationStatus'] == 'unverified', 'role change clears verification')
-call('PATCH', '/me', pat, {'memberRole': 'professional'})
 
 # ── Posts: attachments, views, follow button, Not interested ─────────────────
 doc = media(rita_id, 'document', 'application/pdf', 'public')
@@ -217,7 +249,11 @@ check(set(sg) == {'projects', 'forums', 'people', 'events'} and any(x['id'] == p
 check(call('GET', f'/users/{rita_id}', ivan)['verified'], 'profile shows verified')
 
 # ── Admin: verification filter, pending count ─────────────────────────────────
-check(call('GET', '/admin/stats/overview', adm)['pendingVerifications'] >= 2, 'overview counts pending verifications')
+check(call('GET', '/admin/stats/overview', adm)['pendingVerifications'] == 0, 'overview: no verifications waiting')
+# Forms left pending by the old manual flow are cleared by the daily job
+psql(f"update member_verifications set status = 'pending', decided_by = null where user_id = '{ivan_id}'")
+call('GET', '/internal/cron/cleanup', 'cron-test')
+check(psql(f"select status || '|' || decided_by from member_verifications where user_id = '{ivan_id}'") == 'verified|auto', 'cron re-checks forms left pending')
 vu = call('GET', '/admin/users?verificationStatus=verified', adm)['data']
 check(any(u['id'] == rita_id for u in vu) and all(u['verificationStatus'] == 'verified' for u in vu), 'users table filter by verification')
 
@@ -228,7 +264,7 @@ check(all(u['id'] != lea_id for u in call('GET', f'/users/{rita_id}/followers', 
 check(any(u['id'] == lea_id for u in call('GET', f'/users/{rita_id}/followers', rita)['data']), 'others still see them')
 
 # ── Account purge removes verification data, blocks and pending requests ─────
-gone, gone_id = member('Gina Gone', 'gina.g@example.com', 'researcher', {'orcidId': '0000-0001-0002-0003'})
+gone, gone_id = member('Gina Gone', 'gina.g@example.com', 'researcher', {'orcidId': '0009-0004-2468-1354'})
 call('POST', f'/users/{rita_id}/block', gone, expect=204)
 call('POST', '/collaboration-requests', gone, {'recipientId': ivan_id}, expect=201)
 call('DELETE', '/me', gone, {'password': 'Secret123', 'confirm': 'DELETE'}, expect=204)

@@ -29,7 +29,9 @@ export type NotificationType =
   | 'admin_activity'
   | 'collaboration_request'
   | 'collaboration_accepted'
-  | 'verification';
+  | 'verification'
+  /** Admins: a member finished onboarding (or changed role), with the automatic verification result. */
+  | 'new_member';
 
 export interface NotifyInput {
   type: NotificationType;

@@ -15,7 +15,7 @@ for tok, role in [(own, 'innovator'), (mem, 'expert'), (rep, 'student')]:
 
 # ── Profile fields (admin Settings → Profile, user details panel) ─────────────
 me = call('PATCH', '/me', mem, {'location': 'Lugbe, Abuja, Nigeria', 'phone': '+234 803 000 0000'})
-call('PUT', '/me/role', mem, {'memberRole': 'researcher', 'details': {'institutionalEmail': 'musa@uni.edu.ng', 'researchProjectLink': 'https://research.example.org/musa', 'researchEvidence': 'Paper on solar irrigation'}})
+call('PUT', '/me/role', mem, {'memberRole': 'researcher', 'details': {'institutionalEmail': 'musa@uni.edu.ng', 'researchProjectLink': 'https://research.uni.edu.ng/musa', 'researchEvidence': 'Paper on solar irrigation'}})
 check(me['location'] == 'Lugbe, Abuja, Nigeria' and me['phone'] == '+234 803 000 0000', 'PATCH /me saves location and phone')
 call('PATCH', '/me', mem, {'phone': 'call me'}, expect=400)
 

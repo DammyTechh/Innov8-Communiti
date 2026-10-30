@@ -1,5 +1,15 @@
 import { z } from 'zod';
 import { memberRoleEnum, verificationStatusEnum } from '../_shared/dto.js';
+import { assessText } from '../verification/text.js';
+
+/** A person's name: letters (any alphabet), spaces, hyphens, apostrophes and dots, and not a placeholder or keyboard mash. */
+export const personName = z
+  .string()
+  .trim()
+  .min(2, 'Enter your full name')
+  .max(80)
+  .refine((v) => assessText(v, 'person').ok, 'Enter your real name, using letters only')
+  .describe('Full name, e.g. Adaeze Okafor');
 
 export const email = z
   .email('Enter a valid email address')
@@ -63,7 +73,7 @@ export const accepted = z.object({ message: z.string() }).meta({ id: 'Accepted' 
 
 export const registerBody = z
   .object({
-    fullName: z.string().trim().min(2, 'Enter your full name').max(80),
+    fullName: personName,
     email,
     location: z.string().trim().min(2, 'Enter your location').max(120).optional().describe('"Input your location", e.g. Lugbe, Abuja'),
     password,

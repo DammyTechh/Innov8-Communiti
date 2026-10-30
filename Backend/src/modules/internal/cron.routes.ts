@@ -8,6 +8,7 @@ import { safeEqual } from '../../lib/crypto.js';
 import { Errors } from '../../lib/errors.js';
 import { templates } from '../../lib/mailer/index.js';
 import { drainBroadcasts } from '../admin/admin.broadcast.js';
+import { processPendingVerifications } from '../me/verification.js';
 import { emailUsers } from '../notifications/notifications.service.js';
 
 const daysAgo = (d: number) => new Date(Date.now() - d * 86_400_000).toISOString();
@@ -86,7 +87,7 @@ export const cronRoutes: FastifyPluginAsyncZod = async (app) => {
     schema: {
       hide: true,
       headers: z.object({ authorization: z.string().optional() }),
-      response: { 200: z.object({ otps: z.number(), sessions: z.number(), reinstated: z.number(), accountsPurged: z.number(), eventReminders: z.number(), broadcastEmails: z.number() }) },
+      response: { 200: z.object({ otps: z.number(), sessions: z.number(), reinstated: z.number(), accountsPurged: z.number(), eventReminders: z.number(), broadcastEmails: z.number(), verificationsProcessed: z.number() }) },
     },
     handler: async (req) => {
       // Vercel Cron sends `Authorization: Bearer $CRON_SECRET`.
@@ -114,9 +115,11 @@ export const cronRoutes: FastifyPluginAsyncZod = async (app) => {
       const accountsPurged = await purgeDeletedAccounts();
       const eventReminders = await sendEventReminders();
       // Broadcast emails still queued (a send that outgrew its request) go out here.
-      const broadcastEmails = await drainBroadcasts({ budgetMs: 15_000 });
-      req.log.info({ otps: otps.length, sessions: expired.length, reinstated: reinstated.length, accountsPurged, eventReminders, broadcastEmails }, 'cron cleanup done');
-      return { otps: otps.length, sessions: expired.length, reinstated: reinstated.length, accountsPurged, eventReminders, broadcastEmails };
+      const broadcastEmails = await drainBroadcasts({ budgetMs: 12_000 });
+      // Forms still waiting from the old manual-review flow go through automatic verification.
+      const verificationsProcessed = await processPendingVerifications(6_000);
+      req.log.info({ otps: otps.length, sessions: expired.length, reinstated: reinstated.length, accountsPurged, eventReminders, broadcastEmails, verificationsProcessed }, 'cron cleanup done');
+      return { otps: otps.length, sessions: expired.length, reinstated: reinstated.length, accountsPurged, eventReminders, broadcastEmails, verificationsProcessed };
     },
   });
 };

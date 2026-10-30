@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { boolean, check, date, index, integer, jsonb, pgTable, primaryKey, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, check, date, index, integer, jsonb, pgTable, primaryKey, smallint, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { createdAt, pk, timestamps, ts } from './_helpers.js';
 import {
   clientKind,
@@ -204,9 +204,22 @@ export const memberVerifications = pgTable(
     reviewedAt: ts(),
     reviewedById: uuid().references(() => users.id, { onDelete: 'set null' }),
     reviewNote: text(),
+    /** Who made the current decision: `auto` (onboarding auto-verification) or `admin` (manual override). */
+    decidedBy: text(),
+    /** 0–100 evidence score from auto-verification. */
+    trustScore: smallint(),
+    /** Every automatic check with its outcome (see modules/verification/engine.ts). */
+    autoChecks: jsonb().$type<Record<string, unknown>>(),
     ...timestamps(),
   },
-  (t) => [index('member_verifications_status_idx').on(t.status, t.submittedAt)],
+  (t) => [
+    index('member_verifications_status_idx').on(t.status, t.submittedAt),
+    // One identity per account: lookups for an ORCID iD or role email already used by someone else.
+    index('member_verifications_orcid_idx').on(sql`(${t.details} ->> 'orcidId')`),
+    index('member_verifications_inst_email_idx').on(sql`lower(${t.details} ->> 'institutionalEmail')`),
+    index('member_verifications_work_email_idx').on(sql`lower(${t.details} ->> 'workEmail')`),
+    index('member_verifications_student_email_idx').on(sql`lower(${t.details} ->> 'studentEmail')`),
+  ],
 );
 
 /** Member-to-member blocks ("Block (user)" on a post). Hides content and stops contact both ways. */

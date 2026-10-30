@@ -60,6 +60,18 @@ const schema = z.object({
   STORAGE_PRIVATE_BUCKET: z.string().default('private-files'),
 
   CRON_SECRET: z.string().default(''),
+
+  /** Onboarding auto-verification: DNS, ORCID and link checks. Set false only for offline test runs. */
+  VERIFICATION_NETWORK_CHECKS: z
+    .enum(['true', 'false', '1', '0'])
+    .default('true')
+    .transform((v) => v === 'true' || v === '1'),
+  ORCID_API_URL: z.url().default('https://pub.orcid.org/v3.0'),
+  /** Email admins (not only in-app + push) about each member who finishes onboarding. */
+  ADMIN_NEW_MEMBER_EMAILS: z
+    .enum(['true', 'false', '1', '0'])
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
   EXPO_ACCESS_TOKEN: z.string().default(''),
 });
 

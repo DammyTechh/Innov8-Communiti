@@ -52,6 +52,9 @@ CREATE TABLE "member_verifications" (
 	"reviewed_at" timestamp with time zone,
 	"reviewed_by_id" uuid,
 	"review_note" text,
+	"decided_by" text,
+	"trust_score" smallint,
+	"auto_checks" jsonb,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -848,6 +851,10 @@ ALTER TABLE "collaboration_requests" ADD CONSTRAINT "collaboration_requests_proj
 ALTER TABLE "collaboration_requests" ADD CONSTRAINT "collaboration_requests_conversation_id_conversations_id_fk" FOREIGN KEY ("conversation_id") REFERENCES "public"."conversations"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "follows_following_idx" ON "follows" USING btree ("following_id");--> statement-breakpoint
 CREATE INDEX "member_verifications_status_idx" ON "member_verifications" USING btree ("status","submitted_at");--> statement-breakpoint
+CREATE INDEX "member_verifications_orcid_idx" ON "member_verifications" USING btree (("details" ->> 'orcidId'));--> statement-breakpoint
+CREATE INDEX "member_verifications_inst_email_idx" ON "member_verifications" USING btree (lower("details" ->> 'institutionalEmail'));--> statement-breakpoint
+CREATE INDEX "member_verifications_work_email_idx" ON "member_verifications" USING btree (lower("details" ->> 'workEmail'));--> statement-breakpoint
+CREATE INDEX "member_verifications_student_email_idx" ON "member_verifications" USING btree (lower("details" ->> 'studentEmail'));--> statement-breakpoint
 CREATE INDEX "otp_codes_lookup_idx" ON "otp_codes" USING btree ("email","purpose","created_at");--> statement-breakpoint
 CREATE INDEX "search_history_user_idx" ON "search_history" USING btree ("user_id","created_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "sessions_refresh_token_hash_key" ON "sessions" USING btree ("refresh_token_hash");--> statement-breakpoint

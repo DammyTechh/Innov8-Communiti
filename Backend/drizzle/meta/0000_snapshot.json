@@ -1,5 +1,5 @@
 {
-  "id": "4002107e-7063-4ee9-8c43-39985c9352e6",
+  "id": "7324fb7c-934c-4e51-ba08-9200007edcb5",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -156,6 +156,24 @@
           "primaryKey": false,
           "notNull": false
         },
+        "decided_by": {
+          "name": "decided_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "trust_score": {
+          "name": "trust_score",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "auto_checks": {
+          "name": "auto_checks",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -185,6 +203,66 @@
               "expression": "submitted_at",
               "isExpression": false,
               "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "member_verifications_orcid_idx": {
+          "name": "member_verifications_orcid_idx",
+          "columns": [
+            {
+              "expression": "(\"details\" ->> 'orcidId')",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "member_verifications_inst_email_idx": {
+          "name": "member_verifications_inst_email_idx",
+          "columns": [
+            {
+              "expression": "lower(\"details\" ->> 'institutionalEmail')",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "member_verifications_work_email_idx": {
+          "name": "member_verifications_work_email_idx",
+          "columns": [
+            {
+              "expression": "lower(\"details\" ->> 'workEmail')",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "member_verifications_student_email_idx": {
+          "name": "member_verifications_student_email_idx",
+          "columns": [
+            {
+              "expression": "lower(\"details\" ->> 'studentEmail')",
+              "asc": true,
+              "isExpression": true,
               "nulls": "last"
             }
           ],

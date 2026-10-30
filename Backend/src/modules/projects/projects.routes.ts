@@ -1,3 +1,4 @@
+import { httpUrl } from '../../lib/url.js';
 import { and, desc, eq, ilike, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -60,8 +61,8 @@ const projectBody = z.object({
   pitch: z.string().trim().max(500).default(''),
   problem: z.string().trim().max(5000).default(''),
   solution: z.string().trim().max(5000).default(''),
-  coverUrl: z.url().nullable().optional(),
-  videoUrl: z.url().nullable().optional(),
+  coverUrl: httpUrl().nullable().optional(),
+  videoUrl: httpUrl().nullable().optional(),
   visibility: z.enum(['public', 'private']).default('public'),
   topicIds: z.array(z.uuid()).max(5).default([]),
 });

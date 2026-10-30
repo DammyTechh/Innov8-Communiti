@@ -1,6 +1,7 @@
 /** Every non-2xx response has this shape: { error: { code, message, fields?, requestId } } */
 export type ErrorCode =
   | 'VALIDATION_FAILED'
+  | 'VERIFICATION_FAILED'
   | 'BAD_REQUEST'
   | 'OTP_INVALID'
   | 'OTP_EXPIRED'
@@ -45,6 +46,8 @@ export class AppError extends Error {
 
 export const Errors = {
   validation: (message: string, fields?: Record<string, string>) => new AppError(400, 'VALIDATION_FAILED', message, fields),
+  /** Onboarding role form failed automatic verification: `fields` says what to fix (`details.<field>`). */
+  verificationFailed: (message: string, fields: Record<string, string>) => new AppError(422, 'VERIFICATION_FAILED', message, fields),
   badRequest: (message: string, code: ErrorCode = 'BAD_REQUEST') => new AppError(400, code, message),
   unauthenticated: (message = 'Sign in to continue', code: ErrorCode = 'UNAUTHENTICATED') => new AppError(401, code, message),
   forbidden: (message = 'You do not have permission to do this', code: ErrorCode = 'FORBIDDEN') => new AppError(403, code, message),

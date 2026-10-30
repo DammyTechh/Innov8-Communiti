@@ -1,3 +1,4 @@
+import { httpUrl } from '../../lib/url.js';
 import { and, asc, count, countDistinct, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, like, lt, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { AnyPgColumn, PgTable } from 'drizzle-orm/pg-core';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
@@ -119,7 +120,7 @@ export const adminRoutes: FastifyPluginAsyncZod = async (app) => {
           pendingReports: z.number(),
           suspendedUsers: z.number(),
           blockedUsers: z.number(),
-          pendingVerifications: z.number().describe('Role forms waiting for review (/admin/verifications)'),
+          pendingVerifications: z.number().describe('Role forms still waiting from before automatic verification (cleared by the daily job). Normally 0'),
         }),
       },
     },
@@ -732,7 +733,7 @@ export const adminRoutes: FastifyPluginAsyncZod = async (app) => {
     title: z.string().trim().min(3).max(160),
     summary: z.string().trim().max(500).default(''),
     body: z.string().trim().max(10000).default(''),
-    coverUrl: z.url().nullable().optional(),
+    coverUrl: httpUrl().nullable().optional(),
     projectId: z.uuid().nullable().optional(),
     position: z.number().int().min(0).default(0),
     topicIds: z.array(z.uuid()).max(5).default([]).describe('Topics for the members\' "Sort topics" filter'),

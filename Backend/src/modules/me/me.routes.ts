@@ -1,9 +1,10 @@
+import { httpUrl } from '../../lib/url.js';
 import { and, desc, eq, inArray, lt, ne, sql } from 'drizzle-orm';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { db } from '../../db/client.js';
 import { topics, userBlocks, userInterests, userSettings, users } from '../../db/schema/index.js';
-import { email as emailSchema, otpCode } from '../auth/auth.schemas.js';
+import { email as emailSchema, otpCode, personName } from '../auth/auth.schemas.js';
 import { consumeOtp, issueOtp, OTP_TTL_SECONDS } from '../auth/otp.service.js';
 import { audit } from '../../lib/audit.js';
 import { Errors } from '../../lib/errors.js';
@@ -16,7 +17,7 @@ import { clearRefreshCookie, revokeAllSessions } from '../auth/session.service.j
 import { auth, memberRoleEnum, noContent, topicDto, userSummary } from '../_shared/dto.js';
 import { cursorPageSchema, cursorQuery } from '../../lib/pagination.js';
 import { userSummaryCols } from '../_shared/users.js';
-import { completeOnboardingIfReady, loadVerification, onboardingDto, onboardingStatus, roleBody, submitRole, verificationDto } from './verification.js';
+import { completeOnboardingIfReady, loadVerification, notifyAdminsOfMember, onboardingDto, onboardingStatus, roleBody, submitRole, verificationDto } from './verification.js';
 
 const tags = ['Me'];
 const username = z
@@ -134,7 +135,10 @@ export const meRoutes: FastifyPluginAsyncZod = async (app) => {
           onboardingCompletedAt: before?.onboarded ?? new Date().toISOString(),
         })
         .where(eq(users.id, me.id));
-      if (before && !before.onboarded) await sendMailSafe(before.email, templates.welcome({ name: before.fullName.split(' ')[0]! }));
+      if (before && !before.onboarded) {
+        await sendMailSafe(before.email, templates.welcome({ name: before.fullName.split(' ')[0]! }));
+        await notifyAdminsOfMember(me.id, 'onboarded');
+      }
       return loadMe(me.id);
     },
   });
@@ -150,12 +154,12 @@ export const meRoutes: FastifyPluginAsyncZod = async (app) => {
       security: auth,
       body: z
         .object({
-          fullName: z.string().trim().min(2).max(80),
+          fullName: personName,
           username,
           headline: z.string().trim().max(100).nullable(),
           bio: z.string().trim().max(500).nullable(),
-          avatarUrl: z.url().nullable(),
-          coverUrl: z.url().nullable(),
+          avatarUrl: httpUrl().nullable(),
+          coverUrl: httpUrl().nullable(),
           memberRole: memberRoleEnum,
           country,
           dateOfBirth: dob,
@@ -193,7 +197,7 @@ export const meRoutes: FastifyPluginAsyncZod = async (app) => {
   });
 
   app.put('/role', {
-    config: { rateLimit: { max: 20, timeWindow: '1 hour' } },
+    config: { rateLimit: { max: 30, timeWindow: '1 hour' } },
     schema: {
       tags,
       summary: 'Submit my role and its verification form (Select Role → Researcher / Innovator / Professional / Learner)',
@@ -203,11 +207,14 @@ export const meRoutes: FastifyPluginAsyncZod = async (app) => {
         '**innovator**: `ventureName`, `description`, `developmentStage` (open | ongoing | closed), `evidenceLink`, `evidenceFileIds`, `otherCueFileIds` (upload with purpose `verification`).',
         '**professional**: `organizationName`, `professionalTitle`, `profileLink`, `workEmail`.',
         '**learner**: `institution`, `courseOfStudy`, `studentEmail`, `level`.',
-        'Every submission sets `verificationStatus: pending` until an admin reviews it (the account stays usable). Completes onboarding when interests are already chosen.',
+        '\n\n**Automatic verification (no admin queue).** The answers are checked on submit (usually 1–6 s: placeholder/gibberish text, ORCID checksum + ORCID record + name match, email domain exists and is not disposable or a personal Gmail/Yahoo address, links open and are not 404 or parked, the same ORCID/email not used by another account).',
+        'Pass → saved with `verificationStatus: verified` (verified badge) and `verification.decidedBy: auto`.',
+        'Fail → `422 VERIFICATION_FAILED`, nothing is saved, and `error.fields` maps `details.<field>` to what to fix (show it under that input). Schema problems (missing or badly formatted fields) are still `400 VALIDATION_FAILED`.',
+        'Completes onboarding when interests are already chosen; admins are notified of every new member.',
       ].join(' '),
       security: auth,
       body: roleBody,
-      response: { 200: meDto },
+      response: { 200: meDto, 422: z.object({ error: z.object({ code: z.literal('VERIFICATION_FAILED'), message: z.string(), fields: z.record(z.string(), z.string()), requestId: z.string() }) }).describe('Automatic verification failed') },
     },
     handler: async (req) => {
       const me = currentUser(req);

@@ -22,7 +22,7 @@ export const API_TAGS = [
   { name: 'Explore', description: 'Suggested for you, events, featured innovations, community highlights' },
   { name: 'Notifications', description: 'In-app notifications and push tokens' },
   { name: 'Reports', description: 'Report content or users' },
-  { name: 'Admin', description: 'Dashboard, moderation, verifications, users, content, events, broadcasts, settings, logs (moderator+)' },
+  { name: 'Admin', description: 'Dashboard, moderation, role verifications (automatic decisions, overrides, re-check), users, content, events, broadcasts, settings, logs (moderator+)' },
 ];
 
 export const swaggerPlugin = fp(async (app: FastifyInstance) => {
@@ -42,13 +42,13 @@ export const swaggerPlugin = fp(async (app: FastifyInstance) => {
           '',
           '**Pagination.** Lists return `{ data, nextCursor }`; pass `?cursor=<nextCursor>` for the next page. Admin tables use `?page=&pageSize=`.',
           '',
-          '**Sign-up and onboarding.** `POST /auth/register` → `POST /auth/verify-email` (signs in) → `GET /me/onboarding` tells you the next screen: `select_role` → `PUT /me/role` (Researcher / Innovator / Professional / Learner form), `interests` → `PUT /me/interests`, `done` → the app. Role forms are reviewed by admins (`verificationStatus`: pending → verified / rejected); `verified: true` on any user means show the verified badge.',
+          '**Sign-up and onboarding.** `POST /auth/register` → `POST /auth/verify-email` (signs in) → `GET /me/onboarding` tells you the next screen: `select_role` → `PUT /me/role` (Researcher / Innovator / Professional / Learner form), `interests` → `PUT /me/interests`, `done` → the app. Role forms are verified automatically on submit: pass → `verificationStatus: verified` at once; fail → `422 VERIFICATION_FAILED` with `error.fields["details.<field>"]` to fix (nothing saved). `verified: true` on any user means show the verified badge.',
           '',
           '**Uploads.** `POST /uploads/presign` → `PUT` the bytes → `POST /uploads/{id}/complete`, then pass the `mediaId` (or `publicUrl` for avatars and covers).',
           '',
           '**Maintenance.** `GET /app-config` on start-up; a `503 MAINTENANCE` response means show the maintenance screen.',
           '',
-          'Screen-by-screen guides: `docs/USER_API.md` (member apps) and `docs/ADMIN_API.md` (admin dashboard) in the API repository.',
+          'Guides in the API repository: `docs/FRONTEND_INTEGRATION.md` (start here), `docs/API_REFERENCE.md` (every endpoint), `docs/USER_API.md` (member screens), `docs/ADMIN_API.md` (admin dashboard).',
         ].join('\n'),
       },
       servers: [{ url: env.API_URL, description: env.NODE_ENV }],

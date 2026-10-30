@@ -1,6 +1,6 @@
 # Member app API (web and mobile)
 
-This guide maps every member screen to its endpoints. The live, complete reference is Swagger at `/api/docs`, generated from the same Zod schemas. Every path below is under `/api/v1`.
+This guide maps every member screen to its endpoints. Start with [`FRONTEND_INTEGRATION.md`](FRONTEND_INTEGRATION.md) (client setup, tokens, errors, onboarding); every field of every endpoint is in [`API_REFERENCE.md`](API_REFERENCE.md), and Swagger is at `/api/docs`. Every path below is under `/api/v1`.
 
 **Conventions**
 - Send `Authorization: Bearer <accessToken>` and `X-Client: web | ios | android` on every call.
@@ -47,10 +47,12 @@ This guide maps every member screen to its endpoints. The live, complete referen
 | **Learner** | `institution` (required), `courseOfStudy` (required), `studentEmail`, `level` (e.g. "200") |
 
 - **Innovator files** (Evidence of work, Other cues): upload with purpose `verification` (PDF, PNG or JPEG, up to 10 MB, private). Pass the ids in `evidenceFileIds` and `otherCueFileIds`.
-- **What happens on submit:**
-  - The form goes to the admins' review queue, and `verificationStatus` becomes `pending`.
-  - The account stays usable while it waits for review.
-  - When an admin approves or rejects it, the member gets an email and an in-app notification (`type: "verification"`).
+- **What happens on submit (automatic verification, no admin queue):**
+  - The answers are checked immediately (1–6 s): real text (no placeholders or keyboard mashing), ORCID checksum, ORCID record and name, email domains (not disposable, not a personal Gmail/Yahoo address, exists and receives mail), links (public, open, not 404 or a parked domain, LinkedIn profile shape), and that no other account uses the same ORCID or email.
+  - **Pass:** `200`, `verificationStatus: "verified"` and `verification.decidedBy: "auto"`. Show the verified badge.
+  - **Fail:** `422 VERIFICATION_FAILED`, nothing saved, and `error.fields["details.<field>"]` says what to fix under each input. Keep the answers in the form and let the member resubmit.
+  - Show a "Verifying your details…" state and use a request timeout of at least 20 s.
+  - Full details and examples: [`FRONTEND_INTEGRATION.md` §6](FRONTEND_INTEGRATION.md#6-onboarding-with-automatic-verification).
 - **Professional headline.** If the profile has no headline yet, `professionalTitle` becomes the headline.
 - **Legacy roles.** `expert`, `investor` and `student` can't be chosen any more. Existing accounts keep them.
 

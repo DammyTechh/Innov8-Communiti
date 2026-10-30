@@ -207,16 +207,28 @@ export const templates = {
     },
   }),
 
-  verificationResult: (p: { name: string; role: string; approved: boolean; note?: string | null }): Template => ({
+  verificationResult: (p: { name: string; role: string; approved: boolean; note?: string | null; automatic?: boolean }): Template => ({
     tag: 'verificationResult',
     subject: p.approved ? `You're verified on ${env.APP_NAME}` : `We couldn't verify your ${env.APP_NAME} profile`,
     content: {
       preheader: p.approved ? `Your ${p.role} profile is verified` : 'Please review your details',
       heading: p.approved ? 'You are verified' : 'Verification needs another look',
       paragraphs: p.approved
-        ? [`Hi ${p.name}, our team reviewed your details and verified your ${p.role} profile. Your profile now shows the verified badge.`]
+        ? [`Hi ${p.name}, ${p.automatic ? 'we checked your details' : 'our team reviewed your details'} and verified your ${p.role} profile. Your profile now shows the verified badge.`]
         : [`Hi ${p.name}, we could not verify your ${p.role} profile from the details you sent.`, ...(p.note ? [`Reason: ${p.note}`] : []), 'You can update your details in Settings → Account Preferences and submit them again.'],
       button: { label: p.approved ? 'Open your profile' : 'Update my details', url: `${env.WEB_URL}/settings` },
+    },
+  }),
+
+  newMemberAdmin: (p: { name: string; member: string; email: string; role: string; result: string; userId: string }): Template => ({
+    tag: 'newMemberAdmin',
+    subject: `New member: ${p.member} (${p.role})`,
+    content: {
+      preheader: `${p.member} finished onboarding as ${p.role}`,
+      heading: 'New member onboarded',
+      paragraphs: [`Hi ${p.name}, ${p.member} (${p.email}) just finished onboarding as ${p.role}.`, `Verification: ${p.result}.`],
+      button: { label: 'Open member', url: `${env.ADMIN_URL}/users/${p.userId}` },
+      footnote: 'You get this email because ADMIN_NEW_MEMBER_EMAILS is on. Turn off "new_member" email notifications in your settings to stop them.',
     },
   }),
 

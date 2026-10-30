@@ -84,14 +84,21 @@ async function resolveUser(token: string): Promise<AuthUser> {
   };
 }
 
+/** Labels a guard so tooling (scripts/generate-api-reference.ts) can tell which routes need what. */
+export const GUARD = Symbol('guard');
+const tag = <T extends object>(fn: T, guard: string) => Object.assign(fn, { [GUARD]: guard });
+
 export const authPlugin = fp(async (app: FastifyInstance) => {
   app.decorateRequest('user', null);
 
-  app.decorate('authenticate', async (req: FastifyRequest) => {
-    const token = bearer(req);
-    if (!token) throw Errors.unauthenticated();
-    req.user = await resolveUser(token);
-  });
+  app.decorate(
+    'authenticate',
+    tag(async (req: FastifyRequest) => {
+      const token = bearer(req);
+      if (!token) throw Errors.unauthenticated();
+      req.user = await resolveUser(token);
+    }, 'auth'),
+  );
 
   app.decorate('authenticateOptional', async (req: FastifyRequest) => {
     const token = bearer(req);
@@ -103,16 +110,21 @@ export const authPlugin = fp(async (app: FastifyInstance) => {
     }
   });
 
-  app.decorate('requireMember', async (req: FastifyRequest) => {
-    if (!req.user) throw Errors.unauthenticated();
-    if (!req.user.onboarded) throw Errors.forbidden('Finish setting up your account first', 'ONBOARDING_REQUIRED');
-    if (req.user.status === 'restricted') throw Errors.forbidden('Your account is restricted from posting right now');
-  });
+  app.decorate(
+    'requireMember',
+    tag(async (req: FastifyRequest) => {
+      if (!req.user) throw Errors.unauthenticated();
+      if (!req.user.onboarded) throw Errors.forbidden('Finish setting up your account first', 'ONBOARDING_REQUIRED');
+      if (req.user.status === 'restricted') throw Errors.forbidden('Your account is restricted from posting right now');
+    }, 'member'),
+  );
 
-  app.decorate('requireRole', (min: PlatformRole) => async (req: FastifyRequest) => {
-    if (!req.user) throw Errors.unauthenticated();
-    if (!hasRole(req.user, min)) throw Errors.forbidden();
-  });
+  app.decorate('requireRole', (min: PlatformRole) =>
+    tag(async (req: FastifyRequest) => {
+      if (!req.user) throw Errors.unauthenticated();
+      if (!hasRole(req.user, min)) throw Errors.forbidden();
+    }, `role:${min}`),
+  );
 });
 
 /** Narrowing helper for handlers behind `authenticate`. */

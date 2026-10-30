@@ -1,3 +1,4 @@
+import { httpUrl } from '../../lib/url.js';
 import { and, desc, eq, ilike, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -39,7 +40,7 @@ export const forumDto = z
 const forumBody = z.object({
   name: z.string().trim().min(3).max(80),
   about: z.string().trim().max(1000).default(''),
-  coverUrl: z.url().nullable().optional(),
+  coverUrl: httpUrl().nullable().optional(),
   visibility: z.enum(['public', 'private']).default('public'),
   topicIds: z.array(z.uuid()).max(5).default([]),
 });

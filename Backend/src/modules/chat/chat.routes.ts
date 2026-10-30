@@ -352,6 +352,8 @@ export const chatRoutes: FastifyPluginAsyncZod = async (app) => {
   });
 
   app.patch('/messages/:id', {
+    // Restricted members can't post, so they can't rewrite what they already posted either.
+    preHandler: [app.requireMember],
     schema: { tags, summary: 'Edit my message (within 15 minutes)', security: auth, params: idParam, body: z.object({ body: z.string().trim().min(1).max(4000) }), response: { 200: messageDto } },
     handler: async (req) => {
       const me = currentUser(req);

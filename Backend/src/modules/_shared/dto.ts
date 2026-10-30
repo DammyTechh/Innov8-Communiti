@@ -14,7 +14,7 @@ export const memberRoleEnum = z
 export const selectableRoleEnum = z.enum(['researcher', 'innovator', 'professional', 'learner']);
 export const verificationStatusEnum = z
   .enum(['unverified', 'pending', 'verified', 'rejected'])
-  .describe('Role verification: unverified (no form yet), pending (waiting for an admin), verified, rejected');
+  .describe('Role verification: unverified (no role form), verified (passed automatic verification or approved by an admin), rejected (refused or revoked by an admin; resubmit with PUT /me/role), pending (legacy: submitted before automatic verification, cleared by the daily job)');
 
 export const userSummary = z
   .object({

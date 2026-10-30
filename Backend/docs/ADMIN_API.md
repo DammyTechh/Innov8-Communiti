@@ -26,7 +26,8 @@ This guide maps every admin dashboard screen to its endpoints. The live, complet
 | 4 KPI cards: Total Users, Active Events, Active Forums, Active Projects | `GET /admin/stats/overview?range=30d` → `cards.totalUsers / activeEvents / activeForums / activeProjects` |
 | User Activity chart | `GET /admin/stats/user-activity?range=30d` → `data[].signups` per `bucket` (day, or month for `12m`) |
 | Moderation Queue card (View All) | `GET /admin/reports?status=all&pageSize=7` |
-| Pending role verifications (badge) | `pendingVerifications` on `GET /admin/stats/overview` |
+| Role verifications waiting (legacy, normally 0) | `pendingVerifications` on `GET /admin/stats/overview` |
+| New members | Bell notifications with `type: "new_member"` |
 | Admin logs card (See All) | `GET /admin/audit-logs?pageSize=3` **(admin)** |
 | Bell | `GET /notifications`, `GET /notifications/unread-count`, `POST /notifications/read { all: true }` (Mark all as read) |
 
@@ -69,21 +70,27 @@ This guide maps every admin dashboard screen to its endpoints. The live, complet
 - `location` is the Location column.
 - Also returned: `ip`, `actor`, `createdAt`.
 
-## Role verifications
+## Role verifications (automatic) and new members
 
-Members submit a role form during onboarding (Researcher, Innovator, Professional or Learner), and again when they change their role or institutional email. Each submission waits here for review. The member-side flow is in [`USER_API.md`](USER_API.md).
+Members submit a role form during onboarding (Researcher, Innovator, Professional or Learner), and again when they change their role or role email. **Forms are verified automatically on submit** — there is no review queue. A form that fails any check is refused on the spot (the member fixes it and resubmits); a form that passes is verified immediately. Admins see every decision here and can override it. The member-side flow and the list of checks are in [`FRONTEND_INTEGRATION.md` §6](FRONTEND_INTEGRATION.md#6-onboarding-with-automatic-verification).
 
 | Action | Call |
 |---|---|
-| Queue | `GET /admin/verifications?status=pending\|verified\|rejected\|all&memberRole=&q=` (pending is oldest first) |
-| Open one (with evidence files) | `GET /admin/verifications/{userId}` |
-| Approve (member gets the verified badge) | `POST /admin/verifications/{userId}/approve { note? }` |
-| Reject (reason required) | `POST /admin/verifications/{userId}/reject { note }` |
+| List | `GET /admin/verifications?status=all\|verified\|rejected\|pending&memberRole=&decidedBy=auto\|admin&maxTrust=&q=&page=&pageSize=` (default `status=all`, newest first) |
+| Low-evidence verifications worth a look | `GET /admin/verifications?status=verified&maxTrust=40` |
+| Open one (evidence files + every automatic check) | `GET /admin/verifications/{userId}` → `autoChecks.checks[]` with `outcome: pass \| warn \| fail \| skipped`, `trustScore` |
+| Approve (override: member gets the verified badge) | `POST /admin/verifications/{userId}/approve { note? }` |
+| Reject / revoke (reason required, shown to the member) | `POST /admin/verifications/{userId}/reject { note }` |
+| Re-run the automatic checks | `POST /admin/verifications/{userId}/recheck` |
 
-- The member is emailed and notified in-app either way.
-- A rejected member can fix their details and submit again, which puts them back in the queue.
-- The user details panel (`GET /admin/users/{id}`) also returns `verificationStatus` and the full `verification` form.
+- Rows carry `decidedBy` (`auto` or `admin`), `trustScore` (0–100: how much independent evidence backed the form — institutional email, ORCID record with matching name, profile link, evidence files) and `flags` (checks that raised a warning, e.g. `email_matches_org`, `independent_evidence`).
+- Overrides return `409` when the form already has that status. The member is emailed and notified in-app.
+- A rejected member can fix their details and submit again; the resubmission goes through automatic verification.
+- `pending` only contains forms from before automatic verification; the daily cron re-checks them, so `pendingVerifications` on the overview is normally `0`.
+- The user details panel (`GET /admin/users/{id}`) also returns `verificationStatus` and the full `verification` form (with `decidedBy`).
 - Verified researchers and professionals can submit expert evaluations on projects.
+
+**New-member notifications.** When a member finishes onboarding (or changes role), every admin and super admin gets an in-app + realtime notification: `type: "new_member"`, `targetType: "user"`, `targetId` = the member, title `New member: <name>`, body `<Role> · verified automatically (trust 85/100)`, and `data: { event: "onboarded" | "role_changed", memberRole, verificationStatus, trustScore, flags }`. Open the user details page from it. Set `ADMIN_NEW_MEMBER_EMAILS=true` on the server to also email admins (each admin can turn email off with `notificationPrefs.new_member.email = false`).
 
 ## Moderation queue and Review Report panel
 

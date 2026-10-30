@@ -79,6 +79,8 @@ export const postRoutes: FastifyPluginAsyncZod = async (app) => {
   });
 
   app.patch('/posts/:id', {
+    // Restricted members can't post, so they can't rewrite what they already posted either.
+    preHandler: [app.requireMember],
     schema: {
       tags,
       summary: 'Edit my post',
@@ -166,6 +168,8 @@ export const postRoutes: FastifyPluginAsyncZod = async (app) => {
   });
 
   app.patch('/comments/:id', {
+    // Restricted members can't post, so they can't rewrite what they already posted either.
+    preHandler: [app.requireMember],
     schema: { tags, summary: 'Edit my comment', security: auth, params: idParam, body: z.object({ body: z.string().trim().min(1).max(2000) }), response: { 200: commentDto } },
     handler: async (req) => comments.updateComment(currentUser(req).id, req.params.id, req.body.body),
   });

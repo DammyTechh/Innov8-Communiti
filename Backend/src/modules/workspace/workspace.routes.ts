@@ -1,3 +1,4 @@
+import { httpUrl } from '../../lib/url.js';
 import { and, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -167,7 +168,7 @@ export const workspaceRoutes: FastifyPluginAsyncZod = async (app) => {
       summary: 'Create a prototype (contributor+)',
       security: auth,
       params: pid,
-      body: z.object({ name: z.string().trim().min(2).max(120), description: z.string().trim().max(2000).default(''), coverUrl: z.url().nullable().optional() }),
+      body: z.object({ name: z.string().trim().min(2).max(120), description: z.string().trim().max(2000).default(''), coverUrl: httpUrl().nullable().optional() }),
       response: { 201: S.prototypeDto },
     },
     handler: async (req, reply) => {
@@ -209,7 +210,7 @@ export const workspaceRoutes: FastifyPluginAsyncZod = async (app) => {
       summary: 'Edit a prototype (contributor+)',
       security: auth,
       params: pidAnd('prototypeId'),
-      body: z.object({ name: z.string().trim().min(2).max(120), description: z.string().trim().max(2000), coverUrl: z.url().nullable() }).partial(),
+      body: z.object({ name: z.string().trim().min(2).max(120), description: z.string().trim().max(2000), coverUrl: httpUrl().nullable() }).partial(),
       response: { 200: S.prototypeDto },
     },
     handler: async (req) => {

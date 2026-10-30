@@ -1,3 +1,4 @@
+import { httpUrl } from '../../lib/url.js';
 import { z } from 'zod';
 import { mediaDto, topicDto, userSummary } from '../_shared/dto.js';
 
@@ -39,7 +40,7 @@ export const eventFields = z.object({
     category: eventCategory.default('other'),
     summary: z.string().trim().max(300).default(''),
     description: z.string().trim().max(10000).default(''),
-    coverUrl: z.url().nullable().optional(),
+    coverUrl: httpUrl().nullable().optional(),
     startsAt: z.iso.datetime({ offset: true }),
     endsAt: z.iso.datetime({ offset: true }),
     timezone: z.string().max(60).default('Africa/Lagos'),
@@ -47,17 +48,17 @@ export const eventFields = z.object({
     city: z.string().max(100).nullable().optional(),
     country: z.string().max(2).nullable().optional(),
     isOnline: z.boolean().default(false),
-    meetingUrl: z.url().nullable().optional(),
-    registrationUrl: z.url().nullable().optional(),
+    meetingUrl: httpUrl().nullable().optional(),
+    registrationUrl: httpUrl().nullable().optional(),
     organizerName: z.string().trim().max(120).nullable().optional().describe('"Organized by", e.g. Innovation Hub'),
-    organizerLogoUrl: z.url().nullable().optional().describe('Upload with purpose `event`, then pass the publicUrl'),
+    organizerLogoUrl: httpUrl().nullable().optional().describe('Upload with purpose `event`, then pass the publicUrl'),
     organizerTagline: z.string().trim().max(120).nullable().optional().describe('Line under the organizer name, e.g. Creative Media'),
     capacity: z.number().int().positive().nullable().optional(),
     status: z.enum(['draft', 'published', 'cancelled']).default('draft'),
 });
 
 export const eventBody = eventFields
-  .extend({ registrationUrl: z.url('Enter a valid registration link').describe('Required: the Register button opens it') })
+  .extend({ registrationUrl: httpUrl('Enter a valid registration link').describe('Required: the Register button opens it') })
   .refine((e) => new Date(e.endsAt) > new Date(e.startsAt), { message: 'End time must be after the start time', path: ['endsAt'] });
 
 export const featuredDto = z

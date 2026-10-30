@@ -6,7 +6,8 @@ One REST API for the CommUniti member web app, admin dashboard and mobile app.
 
 - Swagger UI: `/api/docs` · OpenAPI JSON: `/api/docs/openapi.json`
 - Base path: `/api/v1`
-- 209 documented operations
+- 210 documented operations
+- **Frontend developers start here:** [`docs/FRONTEND_INTEGRATION.md`](docs/FRONTEND_INTEGRATION.md) (client setup, tokens, errors, onboarding), then [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) (every endpoint with its fields, generated from the code)
 - Screen-by-screen endpoint guides: [`docs/USER_API.md`](docs/USER_API.md) (member web and mobile apps) and [`docs/ADMIN_API.md`](docs/ADMIN_API.md) (admin dashboard)
 
 ---
@@ -14,7 +15,7 @@ One REST API for the CommUniti member web app, admin dashboard and mobile app.
 ## 1. Run locally
 
 ```bash
-cd apps/api
+cd Backend
 npm install
 cp .env.example .env         # fill in DATABASE_URL, DIRECT_URL, JWT_ACCESS_SECRET at minimum
 npm run db:migrate           # applies the single migration
@@ -33,8 +34,11 @@ Without `SMTP_PASS`, emails are not sent. They are logged instead, including the
 | `db:generate` then `db:build` | Regenerate the DDL from `src/db/schema`, then rebuild the single migration file |
 | `db:seed-admin` | Create or promote the first `super_admin` |
 | `openapi:export` | Write `openapi.json` for client codegen or Postman |
+| `docs:reference` | Regenerate `docs/API_REFERENCE.md` from the route schemas |
+| `verification:data` | Refresh the university-domain and disposable-email lists used by auto-verification |
 | `mail:test` | Verify Resend SMTP and send one sample of every email template |
-| `test:e2e` | End-to-end suite (802 checks) against a running API |
+| `test` | Unit tests (CORS rules, auto-verification engine) |
+| `test:e2e` | End-to-end suite (839 checks) against a running API |
 | `openapi:validate` | Validate `openapi.json` against the OpenAPI 3.1 spec |
 
 ## 2. Migrations
@@ -42,6 +46,8 @@ Without `SMTP_PASS`, emails are not sent. They are logged instead, including the
 `supabase/migrations/20260924000000_init.sql` is the entire database: 57 tables, enums, keys and indexes.
 
 `supabase/migrations/20261027000000_admin_dashboard.sql` upgrades a database created before the admin dashboard update (forum/project moderation status, report numbers, email broadcasts, platform settings, maintenance windows). `supabase/migrations/20261028000000_member_experience.sql` does the same for the member-app update (four roles with verification, blocks, collaboration requests, post views, comment attachments, forum mute, featured topics and gallery, topic descriptions).
+
+`supabase/migrations/20261030000000_auto_verification.sql` adds automatic role verification (where the automatic decision, trust score and checks are stored, plus the indexes that stop one ORCID iD or role email backing two accounts).
 
 Every statement in the upgrade files is idempotent, so on a fresh database, where the rebuilt init file already has all of it, they are no-ops. `npm run db:migrate` applies whichever files a database has not seen yet.
 
@@ -136,19 +142,47 @@ The API logs a warning at startup while it is in test mode.
 | `broadcast` | Admin → Notifications: alerts sent to all members or a segment (email by default) |
 | `maintenance` | Admin → Settings → Schedule maintenance (always sent, ignores the broadcast opt-out) |
 | `emailChangeCode` | Changing the sign-in email: code sent to the new address |
-| `verificationResult` | An admin approved or rejected a member's role verification |
+| `verificationResult` | An admin approved or revoked a member's role verification, or a re-check changed it |
+| `newMemberAdmin` | To admins, when a member finishes onboarding (only with `ADMIN_NEW_MEMBER_EMAILS=true`) |
 | `collaborationRequest` | Someone sent you a collaboration request (members can turn it off: `notificationPrefs.collaboration_request.email = false`) |
 | `emailChanged` | Email changed: notice sent to the old address |
 
 Users can switch off email per notification type (`PATCH /me/settings`, `notificationPrefs[type].email = false`). Security emails (codes, password changes, sign-in alerts, account status) are always sent.
 
-## 6. CI/CD and deploying to Vercel
+## 6. Onboarding auto-verification
+
+Role forms (`PUT /me/role`) are verified automatically on submit; nothing waits for an admin. Code: `src/modules/verification/`.
+
+- **Local rules (always):** placeholder/gibberish text detection (tested against 10,000+ university names, Nigerian names and institutions), levels, ORCID ISO 7064 checksum and issued range, email syntax, ~10,000 disposable domains, consumer mailboxes (Gmail, Yahoo, Outlook…) refused in institutional/work/student fields, reserved/private hosts and IPs, LinkedIn profile URL shape, the same ORCID iD or role email already used by another account.
+- **Network checks (`VERIFICATION_NETWORK_CHECKS=true`, default):** the email domain exists and receives mail (MX / A), the ORCID record exists, isn't deactivated and carries the member's name (public ORCID API), links resolve, don't return 404/410 or a "not found" page and aren't parked "domain for sale" pages, and whether the page mentions the member or organisation. All outbound requests go through an SSRF guard (private, loopback, link-local and metadata addresses are refused at connect time, including after redirects), with timeouts and a size cap.
+- **Decision:** any failed check → `422 VERIFICATION_FAILED` with a message per field, nothing saved. Otherwise → `verified` immediately with a 0–100 `trustScore`. Lookups that can't complete (site blocks bots, timeout, DNS down) never reject; they only lower the score.
+- **Admins** get an in-app `new_member` notification for every member who finishes onboarding (email too with `ADMIN_NEW_MEMBER_EMAILS=true`), see every check in `GET /admin/verifications/{userId}`, and can approve, revoke or re-check.
+- **Backlog:** forms left `pending` by the old manual flow are re-checked by the daily cron (`verificationsProcessed` in its response).
+- Refresh the reference lists with `npm run verification:data`.
+
+## 7. CI/CD and deploying to Vercel
+
+### Manual deploy (from this folder or the release zip)
+
+The GitHub Actions workflow files are not part of this repository, so a manual deploy is:
+
+1. **Environment.** In Vercel → Project → Settings → Environment Variables, set everything in `.env.production.example` (new in this release: `VERIFICATION_NETWORK_CHECKS=true`, `ORCID_API_URL`, `ADMIN_NEW_MEMBER_EMAILS`; all have safe defaults).
+2. **Migrate the database** (once per release, before or right after deploying):
+   ```bash
+   npm ci
+   DIRECT_URL='postgresql://…:5432/postgres' npm run db:migrate   # applies only files not yet applied
+   ```
+   Or paste `supabase/migrations/20261030000000_auto_verification.sql` into the Supabase SQL editor (it is idempotent).
+3. **Deploy:** `npx vercel deploy --prod` from this folder (Root Directory `Backend` if deploying from the repo root).
+4. **Check:** `GET https://api.mycommuniti.org/api/v1/health` → `{"status":"ok","db":"ok"}`.
+
+### Automated pipeline
 
 Deployments go through GitHub Actions, never straight from Vercel. `vercel.json` sets `git.deploymentEnabled: false`, so nothing reaches production without passing CI. The pipeline, versioning and branch rules are described in `/CONTRIBUTING.md`.
 
 **Pull request**
 - Typecheck, lint, build, migration drift check.
-- Postgres plus 802 end-to-end checks.
+- Postgres plus 839 end-to-end checks.
 - **CI passed** (the required check), then a preview deploy with its URL commented on the PR.
 
 **Merge to `main`**
@@ -157,8 +191,8 @@ Deployments go through GitHub Actions, never straight from Vercel. `vercel.json`
 
 One-time setup:
 
-1. In Vercel, create a project (Root Directory `apps/api`, Framework *Other*). Add every variable from `.env.example`, with `NODE_ENV=production`, to both the Production and Preview environments.
-2. Locally, run `npx vercel link` in `apps/api` to get `orgId`/`projectId` (in `.vercel/project.json`). Create a token at vercel.com/account/tokens.
+1. In Vercel, create a project (Root Directory `Backend`, Framework *Other*). Add every variable from `.env.example`, with `NODE_ENV=production`, to both the Production and Preview environments.
+2. Locally, run `npx vercel link` in `Backend` to get `orgId`/`projectId` (in `.vercel/project.json`). Create a token at vercel.com/account/tokens.
 3. In GitHub → Settings → Secrets and variables → Actions:
    - Secrets: `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `PRODUCTION_DIRECT_URL` (Supabase session pooler, port 5432).
    - Variable: `PRODUCTION_API_URL`.
@@ -182,7 +216,7 @@ Vercel's own cron still runs daily against `/api/v1/internal/cron/cleanup` with 
 
 With `COOKIE_SAMESITE=auto`, a frontend on `*.mycommuniti.org` gets a host-only `HttpOnly; Secure; SameSite=Lax` cookie on `api.mycommuniti.org`. That is the most robust option, because browsers treat it as first-party. A frontend on another site (e.g. a Vercel preview) gets `SameSite=None; Secure`. Some browsers, notably Safari, block such third-party cookies, so keep production frontends on `mycommuniti.org` subdomains. Leave `COOKIE_DOMAIN` empty.
 
-## 7. Frontend integration
+## 8. Frontend integration
 
 **Every request**
 - Send `X-Client: web | admin | ios | android`.
@@ -203,7 +237,7 @@ With `COOKIE_SAMESITE=auto`, a frontend on `*.mycommuniti.org` gets a host-only 
 1. `POST /auth/register` (full name, email, location, password, confirm password, terms)
 2. `POST /auth/verify-email` (returns tokens)
 3. `GET /me/onboarding` → `nextStep`:
-   - `select_role`: `PUT /me/role { memberRole, details }` (Researcher, Innovator, Professional or Learner form; reviewed by admins)
+   - `select_role`: `PUT /me/role { memberRole, details }` (Researcher, Innovator, Professional or Learner form; verified automatically: `200` verified, or `422 VERIFICATION_FAILED` with the fields to fix)
    - `interests`: `GET /topics`, then `PUT /me/interests`
    - `done`: the app
 
@@ -247,10 +281,10 @@ Clients may broadcast `typing` on conversation channels.
 - Lists: `?cursor=&limit=`, returning `{ data, nextCursor }`.
 - Admin tables: `?page=&pageSize=`, returning `{ data, page, pageSize, total }`.
 
-## 8. Project structure
+## 9. Project structure
 
 ```
-apps/api
+Backend
 ├── api/index.ts               Vercel entry (reuses one Fastify instance per warm function)
 ├── src/
 │   ├── app.ts                 Fastify setup: CORS, cookies, helmet, rate limit, Swagger, auth, routes
@@ -264,7 +298,10 @@ apps/api
 │   │                          google, pagination, audit, logger, zod (patchOf), stats (KPI ranges)
 │   ├── plugins/               auth (authenticate, requireMember, requireRole), error handler, swagger
 │   └── modules/<domain>/      *.routes.ts (HTTP + schemas) · *.service.ts (logic) · *.schemas.ts
-├── docs/ADMIN_API.md          Admin dashboard: screen → endpoint guide
+├── docs/FRONTEND_INTEGRATION.md  Frontend guide: client, tokens, errors, onboarding (start here)
+├── docs/API_REFERENCE.md     Every endpoint, generated (npm run docs:reference)
+├── docs/USER_API.md          Member apps: screen → endpoint guide
+├── docs/ADMIN_API.md         Admin dashboard: screen → endpoint guide
 ├── scripts/                   migrate, build-migration, seed-admin, export-openapi, test-mail
 └── supabase/migrations/       init (full schema) + idempotent upgrade files
 ```
@@ -280,9 +317,9 @@ apps/api
 - Never use the global `db` inside `db.transaction(...)`; use `tx`. In production the pool is 1 connection, so it would deadlock.
 - LIKE searches go through `contains()` from `lib/like.ts`, so `%` and `_` in user input are escaped.
 
-Tests: see `tests/e2e/README.md` (802 end-to-end checks, run by CI on every push).
+Tests: `npm test` (unit) and `tests/e2e/README.md` (839 end-to-end checks).
 
-## 9. Security summary
+## 10. Security summary
 
 **Passwords and login**
 - Argon2id password hashing.
@@ -303,7 +340,7 @@ Tests: see `tests/e2e/README.md` (802 end-to-end checks, run by CI on every push
 - The service role key is used only on the server.
 - Rate limits: global and stricter per auth route.
 
-## 10. Notes and next steps
+## 11. Notes and next steps
 
 - **Rate limiting** is in-memory per serverless instance. For one shared limit across instances, add an Upstash Redis store to `@fastify/rate-limit`. Auth-critical limits (OTP, lockout) already live in Postgres.
 - **Email volume.** Transactional emails are sent inline and awaited. Admin broadcasts write one `broadcast_deliveries` row per recipient and send in parallel batches for up to about 20 s per request; anything left is sent by `POST /admin/broadcasts/{id}/resume` or the daily cron (two senders never pick the same row). For very large audiences, a per-minute cron (Vercel Pro) calling the same drain, or Resend's batch API, would shorten delivery time.

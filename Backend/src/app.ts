@@ -2,7 +2,7 @@ import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
-import Fastify from 'fastify';
+import Fastify, { type RouteOptions } from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
 import { uuidv7 } from 'uuidv7';
 import { env } from './config/env.js';
@@ -13,7 +13,12 @@ import { authPlugin } from './plugins/auth.js';
 import { errorHandlerPlugin } from './plugins/error-handler.js';
 import { swaggerPlugin } from './plugins/swagger.js';
 
-export async function buildApp() {
+export interface BuildOptions {
+  /** Called for every route as it is registered (used by the API reference generator). */
+  onRoute?: (route: RouteOptions) => void;
+}
+
+export async function buildApp(opts: BuildOptions = {}) {
   const app = Fastify({
     logger: loggerOptions,
     trustProxy: true, // behind Vercel's edge: req.ip comes from x-forwarded-for
@@ -59,6 +64,7 @@ export async function buildApp() {
     reply.header('x-request-id', req.id);
   });
 
+  if (opts.onRoute) app.addHook('onRoute', opts.onRoute);
   await app.register(routes, { prefix: '/api/v1' });
 
   app.log.info({ corsOrigins: allowedOriginRules(), cookieSameSite: env.COOKIE_SAMESITE }, 'CORS configuration');
